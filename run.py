@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""
+Smoothie blendedness pipeline runner.
+
+Usage (single image):
+    python run.py --pipeline classical --image data/images/test.jpg
+
+Usage (all pipelines, single image):
+    python run.py --pipeline all --image data/images/test.jpg
+
+Usage (batch — directory of images):
+    python run.py --pipeline classical --image data/images/
+
+Outputs per run:
+    outputs/<stem>_<pipeline>_mask.png      - unblended region overlay
+    outputs/<stem>_<pipeline>_roi.png       - detected container boundary
+    outputs/<stem>_<pipeline>_result.json   - score, passed, metadata
+
+Batch comparison (--pipeline all on a directory):
+    outputs/comparison.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+# allow running from repo root without installing
+sys.path.insert(0, str(Path(__file__).parent))
+
+from smoothie_cv.config import Config
+from smoothie_cv.detection.container import detect_container, draw_container_overlay
+from smoothie_cv.scoring.metrics import overlay_mask
+
+
+PIPELINE_NAMES = ["classical", "vlm", "sam", "segformer"]
+
+
+def load_pipeline(name: str, config: Config):
+    if name == "classical":
+        from smoothie_cv.pipelines.classical_cv import ClassicalCVPipeline
+        return ClassicalCVPipeline(config)
+    if name == "vlm":
+        from smoothie_cv.pipelines.vlm import VLMPipeline
+        return VLMPipeline(config)
+    if name == "sam":
+        from smoothie_cv.pipelines.sam import SAMPipeline
+        return SAMPipeline(config)
+    if name == "segformer":
+        from smoothie_cv.pipelines.segformer import SegFormerPipeline
+        return SegFormerPipeline(config)
+    raise ValueError(f"Unknown pipeline: {name!r}. Choose from {PIPELINE_NAMES}")
+
+
+def run_single(
+    image_path: Path,
+    pipeline_name: str,
+    config: Config,
+) -> dict:
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
+
+    roi_mask, bbox = detect_container(image)
+
+    pipeline = load_pipeline(pipeline_name, config)
+
+    t0 = time.perf_counter()
+    result = pipeline.analyze(image, roi_mask)
+    runtime_ms = (time.perf_counter() - t0) * 1000
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{image_path.stem}_{pipeline_name}"
+
+    # write mask overlay
+    vis = overlay_mask(image, result.mask)
+    mask_path = config.output_dir / f"{stem}_mask.png"
+    cv2.imwrite(str(mask_path), vis)
+
+    # write ROI overlay
+    roi_vis = draw_container_overlay(image, roi_mask)
+    roi_path = config.output_dir / f"{stem}_roi.png"
+    cv2.imwrite(str(roi_path), roi_vis)
+
+    # write JSON result
+    record = {
+        "image": str(image_path),
+        "pipeline": pipeline_name,
+        "blend_score": round(result.blend_score, 4),
+        "passed": result.passed,
+        "threshold": config.threshold,
+        "runtime_ms": round(runtime_ms, 1),
+        "mask_path": str(mask_path),
+        "roi_path": str(roi_path),
+        "metadata": result.metadata,
+    }
+    json_path = config.output_dir / f"{stem}_result.json"
+    json_path.write_text(json.dumps(record, indent=2))
+
+    status = "PASS" if result.passed else "FAIL"
+    print(
+        f"[{pipeline_name}] {image_path.name}  "
+        f"score={result.blend_score:.3f}  {status}  "
+        f"({runtime_ms:.0f} ms)"
+    )
+    print(f"  mask  → {mask_path}")
+    print(f"  roi   → {roi_path}")
+    print(f"  json  → {json_path}")
+    return record
+
+
+def run_batch(
+    image_dir: Path,
+    pipeline_names: list[str],
+    config: Config,
+) -> list[dict]:
+    images = sorted(image_dir.glob("*.jpg")) + sorted(image_dir.glob("*.png"))
+    if not images:
+        print(f"No .jpg/.png images found in {image_dir}")
+        return []
+
+    rows: list[dict] = []
+    for img_path in images:
+        for pname in pipeline_names:
+            try:
+                row = run_single(img_path, pname, config)
+                rows.append(row)
+            except NotImplementedError as e:
+                print(f"[{pname}] SKIP — {e}")
+            except Exception as e:
+                print(f"[{pname}] ERROR on {img_path.name}: {e}")
+    return rows
+
+
+def make_run_dir(output_root: Path, pipeline_names: list[str], started: datetime) -> Path:
+    """Create a unique timestamped subfolder for this run and return it."""
+    stamp = started.strftime("%Y-%m-%d_%H-%M-%S")
+    label = "all" if len(pipeline_names) > 1 else pipeline_names[0]
+    run_dir = output_root / f"{stamp}__{label}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def write_run_manifest(
+    run_dir: Path,
+    records: list[dict],
+    pipeline_names: list[str],
+    image_source: Path,
+    config: Config,
+    started: datetime,
+) -> None:
+    """Write run_info.json (machine) + README.md (human) describing this run."""
+    finished = datetime.now()
+    passed = sum(1 for r in records if r.get("passed"))
+    failed = len(records) - passed
+    scores = [r["blend_score"] for r in records] or [0.0]
+
+    info = {
+        "run_id": run_dir.name,
+        "started": started.isoformat(timespec="seconds"),
+        "finished": finished.isoformat(timespec="seconds"),
+        "duration_s": round((finished - started).total_seconds(), 2),
+        "pipelines": pipeline_names,
+        "threshold": config.threshold,
+        "image_source": str(image_source),
+        "num_images": len({r["image"] for r in records}),
+        "num_results": len(records),
+        "summary": {
+            "pass": passed,
+            "fail": failed,
+            "min_score": round(min(scores), 4),
+            "max_score": round(max(scores), 4),
+            "mean_score": round(sum(scores) / len(scores), 4),
+        },
+        "results": records,
+    }
+    (run_dir / "run_info.json").write_text(json.dumps(info, indent=2))
+
+    # human-readable README
+    lines = [
+        f"# Run {run_dir.name}",
+        "",
+        f"- **When:** {started.strftime('%B %d, %Y at %I:%M:%S %p')}",
+        f"- **Pipelines:** {', '.join(pipeline_names)}",
+        f"- **Threshold:** {config.threshold} (blend_score ≥ threshold → PASS)",
+        f"- **Image source:** `{image_source}`",
+        f"- **Images:** {info['num_images']}  •  **Results:** {info['num_results']}",
+        f"- **Pass / Fail:** {passed} / {failed}",
+        f"- **Score range:** {info['summary']['min_score']}"
+        f"–{info['summary']['max_score']} (mean {info['summary']['mean_score']})",
+        f"- **Duration:** {info['duration_s']} s",
+        "",
+        "## Results",
+        "",
+        "| Image | Pipeline | Score | Result | Runtime (ms) |",
+        "|---|---|---|---|---|",
+    ]
+    for r in records:
+        status = "PASS" if r.get("passed") else "FAIL"
+        lines.append(
+            f"| {Path(r['image']).name} | {r['pipeline']} | "
+            f"{r['blend_score']:.3f} | {status} | {r.get('runtime_ms', '?')} |"
+        )
+    lines.append("")
+    (run_dir / "README.md").write_text("\n".join(lines))
+
+    if records:
+        csv_path = run_dir / "comparison.csv"
+        fieldnames = ["image", "pipeline", "blend_score", "passed", "threshold", "runtime_ms"]
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(records)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Smoothie blendedness pipeline runner")
+    parser.add_argument("--pipeline", required=True,
+                        help=f"Pipeline name or 'all'. Choices: {PIPELINE_NAMES}")
+    parser.add_argument("--image", required=True,
+                        help="Path to an image file or directory of images")
+    parser.add_argument("--threshold", type=float, default=None,
+                        help="Pass/fail threshold (0–1). Overrides config default (0.90).")
+    parser.add_argument("--config", default=None,
+                        help="Path to config.yaml (optional)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory to write outputs (default: outputs/)")
+    args = parser.parse_args()
+
+    config = Config.load(args.config)
+    if args.threshold is not None:
+        config.threshold = args.threshold
+    output_root = Path(args.output_dir) if args.output_dir is not None else config.output_dir
+
+    image_path = Path(args.image)
+    pipeline_names = PIPELINE_NAMES if args.pipeline == "all" else [args.pipeline]
+
+    if not (image_path.is_dir() or image_path.is_file()):
+        print(f"Error: {image_path} is not a file or directory.")
+        sys.exit(1)
+
+    # every invocation gets its own timestamped subfolder under outputs/
+    started = datetime.now()
+    run_dir = make_run_dir(output_root, pipeline_names, started)
+    config.output_dir = run_dir
+    print(f"Run directory → {run_dir}\n")
+
+    records: list[dict] = []
+    if image_path.is_dir():
+        records = run_batch(image_path, pipeline_names, config)
+    else:
+        for pname in pipeline_names:
+            try:
+                records.append(run_single(image_path, pname, config))
+            except NotImplementedError as e:
+                print(f"[{pname}] SKIP — {e}")
+
+    write_run_manifest(run_dir, records, pipeline_names, image_path, config, started)
+    print(f"\nManifest → {run_dir / 'run_info.json'}")
+    print(f"Summary  → {run_dir / 'README.md'}")
+
+
+if __name__ == "__main__":
+    main()

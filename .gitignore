@@ -1,0 +1,14 @@
+# SAM checkpoints (download separately — see CLAUDE.md)
+checkpoints/*.pt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Generated outputs
+outputs/
+
+# Environment / secrets
+.env
