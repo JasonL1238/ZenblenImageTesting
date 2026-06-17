@@ -36,7 +36,13 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent))
 
 from smoothie_cv.config import Config
-from smoothie_cv.detection.container import detect_container, draw_container_overlay
+from smoothie_cv.detection.container import (
+    detect_container,
+    draw_container_overlay,
+    _classify_smoothie,
+    SmoothieType,
+    YellowRefineParams,
+)
 from smoothie_cv.scoring.metrics import overlay_mask
 
 
@@ -59,6 +65,13 @@ def load_pipeline(name: str, config: Config):
     raise ValueError(f"Unknown pipeline: {name!r}. Choose from {PIPELINE_NAMES}")
 
 
+def _shade_subfolder(smoothie_type: SmoothieType) -> str:
+    """Map smoothie type to output subfolder name."""
+    if smoothie_type == SmoothieType.RED_PINK:
+        return "red_pink"
+    return "yellow"
+
+
 def run_single(
     image_path: Path,
     pipeline_name: str,
@@ -68,7 +81,15 @@ def run_single(
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
-    roi_mask, _ = detect_container(image)
+    yellow_params = YellowRefineParams(
+        erode_scale=config.yellow_erode_scale,
+        delta_b=config.yellow_delta_b,
+        a_max=config.yellow_a_max,
+        L_max=config.yellow_L_max,
+        chroma_min=config.yellow_chroma_min,
+    )
+    roi_mask, _ = detect_container(image, yellow_params=yellow_params)
+    smoothie_type = _classify_smoothie(image)
 
     pipeline = load_pipeline(pipeline_name, config)
 
@@ -76,32 +97,35 @@ def run_single(
     result = pipeline.analyze(image, roi_mask)
     runtime_ms = (time.perf_counter() - t0) * 1000
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    # Place output in shade-based subfolder
+    shade_dir = config.output_dir / _shade_subfolder(smoothie_type)
+    shade_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{image_path.stem}_{pipeline_name}"
-
-    # write mask overlay
-    vis = overlay_mask(image, result.mask)
-    mask_path = config.output_dir / f"{stem}_mask.png"
-    cv2.imwrite(str(mask_path), vis)
 
     # write ROI overlay
     roi_vis = draw_container_overlay(image, roi_mask)
-    roi_path = config.output_dir / f"{stem}_roi.png"
+    roi_path = shade_dir / f"{stem}_roi.png"
     cv2.imwrite(str(roi_path), roi_vis)
+
+    # write mask overlay (unblended region highlighted)
+    mask_vis = overlay_mask(image, result.mask)
+    mask_path = shade_dir / f"{stem}_mask.png"
+    cv2.imwrite(str(mask_path), mask_vis)
 
     # write JSON result
     record = {
         "image": str(image_path),
         "pipeline": pipeline_name,
+        "smoothie_type": smoothie_type.value,
         "blend_score": round(result.blend_score, 4),
         "passed": result.passed,
         "threshold": config.threshold,
         "runtime_ms": round(runtime_ms, 1),
-        "mask_path": str(mask_path),
         "roi_path": str(roi_path),
+        "mask_path": str(mask_path),
         "metadata": result.metadata,
     }
-    json_path = config.output_dir / f"{stem}_result.json"
+    json_path = shade_dir / f"{stem}_result.json"
     json_path.write_text(json.dumps(record, indent=2))
 
     status = "PASS" if result.passed else "FAIL"
@@ -110,8 +134,8 @@ def run_single(
         f"score={result.blend_score:.3f}  {status}  "
         f"({runtime_ms:.0f} ms)"
     )
-    print(f"  mask  → {mask_path}")
     print(f"  roi   → {roi_path}")
+    print(f"  mask  → {mask_path}")
     print(f"  json  → {json_path}")
     return record
 
@@ -121,7 +145,7 @@ def run_batch(
     pipeline_names: list[str],
     config: Config,
 ) -> list[dict]:
-    images = sorted(image_dir.glob("*.jpg")) + sorted(image_dir.glob("*.png"))
+    images = sorted(image_dir.rglob("*.jpg")) + sorted(image_dir.rglob("*.png"))
     if not images:
         print(f"No .jpg/.png images found in {image_dir}")
         return []

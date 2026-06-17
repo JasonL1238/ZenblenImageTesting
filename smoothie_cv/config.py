@@ -29,6 +29,20 @@ class Config:
     canny_lo: int = 50
     canny_hi: int = 150
 
+    # --- yellow ROI refinement ---
+    # Fraction of min(H,W) to erode inward from the coarse geometry mask,
+    # removing cup-edge plastic, reflections, and border glare.
+    yellow_erode_scale: float = 0.018
+    # Adaptive threshold: how many b* units below the center-crop median
+    # a pixel can still be considered yellow smoothie.
+    yellow_delta_b: float = 12.0
+    # Hard cap on a* (0-centered): excludes pink/red contamination.
+    yellow_a_max: float = 14.0
+    # L* ceiling: pixels brighter than this are foam, glare, or specular — excluded.
+    yellow_L_max: float = 220.0
+    # Minimum LAB chroma (sqrt(a²+b²)) inside the ROI; rejects neutral metal/white.
+    yellow_chroma_min: float = 6.0
+
     # --- SAM2 ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
     sam_points_per_side: int = 32
