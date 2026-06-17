@@ -172,6 +172,44 @@ def make_run_dir(output_root: Path, pipeline_names: list[str], started: datetime
     return run_dir
 
 
+def format_run_readme(info: dict) -> str:
+    """Build a short human-readable summary; full data lives in comparison.csv."""
+    run_id = info["run_id"]
+    pipelines = ", ".join(info["pipelines"])
+    multi_pipeline = len(info["pipelines"]) > 1
+    summary = info["summary"]
+    started = datetime.fromisoformat(info["started"]).strftime("%Y-%m-%d %H:%M")
+
+    lines = [
+        f"# {run_id}",
+        "",
+        f"{pipelines} · `{info['image_source']}` · threshold **{info['threshold']:.2f}** · "
+        f"{info['duration_s']}s · {started}",
+        "",
+        f"**{summary['pass']} pass / {summary['fail']} fail** "
+        f"({info['num_images']} images) · "
+        f"scores {summary['min_score']:.3f}–{summary['max_score']:.3f}, "
+        f"mean {summary['mean_score']:.3f}",
+    ]
+
+    failures = [r for r in info["results"] if not r.get("passed")]
+    if failures:
+        lines.extend(["", "## Failures", ""])
+        if multi_pipeline:
+            lines.extend(["| Image | Pipeline | Score |", "|---|---|---|"])
+            for r in failures:
+                lines.append(
+                    f"| `{Path(r['image']).name}` | {r['pipeline']} | {r['blend_score']:.3f} |"
+                )
+        else:
+            lines.extend(["| Image | Score |", "|---|---|"])
+            for r in failures:
+                lines.append(f"| `{Path(r['image']).name}` | {r['blend_score']:.3f} |")
+
+    lines.extend(["", "→ [comparison.csv](comparison.csv) · [run_info.json](run_info.json)", ""])
+    return "\n".join(lines)
+
+
 def write_run_manifest(
     run_dir: Path,
     records: list[dict],
@@ -206,34 +244,7 @@ def write_run_manifest(
         "results": records,
     }
     (run_dir / "run_info.json").write_text(json.dumps(info, indent=2))
-
-    # human-readable README
-    lines = [
-        f"# Run {run_dir.name}",
-        "",
-        f"- **When:** {started.strftime('%B %d, %Y at %I:%M:%S %p')}",
-        f"- **Pipelines:** {', '.join(pipeline_names)}",
-        f"- **Threshold:** {config.threshold} (blend_score ≥ threshold → PASS)",
-        f"- **Image source:** `{image_source}`",
-        f"- **Images:** {info['num_images']}  •  **Results:** {info['num_results']}",
-        f"- **Pass / Fail:** {passed} / {failed}",
-        f"- **Score range:** {info['summary']['min_score']}"
-        f"–{info['summary']['max_score']} (mean {info['summary']['mean_score']})",
-        f"- **Duration:** {info['duration_s']} s",
-        "",
-        "## Results",
-        "",
-        "| Image | Pipeline | Score | Result | Runtime (ms) |",
-        "|---|---|---|---|---|",
-    ]
-    for r in records:
-        status = "PASS" if r.get("passed") else "FAIL"
-        lines.append(
-            f"| {Path(r['image']).name} | {r['pipeline']} | "
-            f"{r['blend_score']:.3f} | {status} | {r.get('runtime_ms', '?')} |"
-        )
-    lines.append("")
-    (run_dir / "README.md").write_text("\n".join(lines))
+    (run_dir / "README.md").write_text(format_run_readme(info))
 
     if records:
         csv_path = run_dir / "comparison.csv"
