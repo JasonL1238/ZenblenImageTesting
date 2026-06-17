@@ -18,5 +18,7 @@ class SegFormerPipeline(BlendPipeline):
             "SegFormer pipeline needs a fine-tuned checkpoint. "
             "Steps: (1) run the VLM pipeline on your images to generate pseudo-labels, "
             "(2) train transformers.SegformerForSemanticSegmentation with two classes "
-            "(blended / unblended), (3) set Config.segformer_checkpoint to the saved path."
+            "(blended / unblended), (3) set Config.segformer_checkpoint to the saved path. "
+            "Inference must use crop_to_roi() before segmentation and paste_mask() "
+            "before scoring — same ROI-first contract as classical and SAM."
         )

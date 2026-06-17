@@ -35,6 +35,43 @@ def _roi(h: int = 100, w: int = 100) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# ROI helpers
+# ---------------------------------------------------------------------------
+
+class TestRoiCrop:
+    def test_crop_zeros_pixels_outside_contour(self):
+        from smoothie_cv.roi import crop_to_roi, paste_mask
+
+        image = np.full((100, 100, 3), 200, dtype=np.uint8)
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        mask[20:80, 30:70] = 255
+
+        roi = crop_to_roi(image, mask)
+        assert roi.image.shape == (60, 40, 3)
+        assert roi.offset == (30, 20)
+        assert (roi.mask > 0).sum() == (mask > 0).sum()
+        assert (roi.image[roi.mask == 0] == 0).all()
+
+        crop_result = np.zeros(roi.image.shape[:2], dtype=np.uint8)
+        crop_result[roi.mask > 0] = 255
+        full = paste_mask(crop_result, roi)
+        assert full.shape == (100, 100)
+        assert (full == mask).all()
+
+    def test_paste_round_trip(self):
+        from smoothie_cv.roi import crop_to_roi, paste_mask
+
+        image = _solid_image()
+        mask = _roi()
+        roi = crop_to_roi(image, mask)
+        crop_mask = np.zeros(roi.image.shape[:2], dtype=np.uint8)
+        crop_mask[10:20, 10:20] = 255
+        full = paste_mask(crop_mask, roi)
+        x, y = roi.offset
+        assert full[y + 10 : y + 20, x + 10 : x + 20].sum() == 255 * 100
+
+
+# ---------------------------------------------------------------------------
 # Classical CV pipeline
 # ---------------------------------------------------------------------------
 
@@ -71,6 +108,10 @@ class TestClassicalCVPipeline:
         uniform_score = self.pipeline.analyze(_solid_image(), _roi()).blend_score
         chunky_score = self.pipeline.analyze(_patchy_image(), _roi()).blend_score
         assert chunky_score <= uniform_score
+
+    def test_mask_zero_outside_roi(self):
+        result = self.pipeline.analyze(_patchy_image(), _roi())
+        assert (result.mask[_roi() == 0] == 0).all()
 
 
 # ---------------------------------------------------------------------------

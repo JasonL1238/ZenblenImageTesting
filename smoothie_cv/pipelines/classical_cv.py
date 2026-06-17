@@ -15,6 +15,7 @@ import numpy as np
 
 from smoothie_cv.config import Config
 from smoothie_cv.pipelines.base import BlendPipeline, BlendResult
+from smoothie_cv.roi import crop_to_roi, paste_mask
 from smoothie_cv.scoring.metrics import compute_blend_score
 
 
@@ -30,25 +31,26 @@ class ClassicalCVPipeline(BlendPipeline):
         if roi_mask is None:
             roi_mask = np.full((h, w), 255, dtype=np.uint8)
 
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        roi = crop_to_roi(image, roi_mask)
+
+        lab = cv2.cvtColor(roi.image, cv2.COLOR_BGR2LAB)
 
         # --- signal 1: local color variance in LAB ---
-        variance_mask = self._variance_mask(lab, roi_mask)
+        variance_mask = self._variance_mask(lab, roi.mask)
 
         # --- signal 2: edge density (chunk boundaries) ---
-        edge_mask = self._edge_mask(image, roi_mask)
+        edge_mask = self._edge_mask(roi.image, roi.mask)
 
         # --- combine ---
         unblended = cv2.bitwise_or(variance_mask, edge_mask)
-
-        # apply ROI
-        unblended = cv2.bitwise_and(unblended, roi_mask)
+        unblended = cv2.bitwise_and(unblended, roi.mask)
 
         # morphological cleanup: remove tiny noise, close small gaps
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         unblended = cv2.morphologyEx(unblended, cv2.MORPH_OPEN, kernel)
         unblended = cv2.morphologyEx(unblended, cv2.MORPH_CLOSE, kernel)
 
+        unblended = paste_mask(unblended, roi)
         score = compute_blend_score(unblended, roi_mask)
         passed = score >= self.config.threshold
 

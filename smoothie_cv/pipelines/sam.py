@@ -6,6 +6,7 @@ import torch
 
 from smoothie_cv.config import Config
 from smoothie_cv.pipelines.base import BlendPipeline, BlendResult
+from smoothie_cv.roi import crop_to_roi, paste_mask
 from smoothie_cv.scoring.metrics import compute_blend_score
 
 # maps Config.sam_model string → (hydra config yaml, checkpoint filename)
@@ -20,10 +21,10 @@ _MODEL_MAP: dict[str, tuple[str, str]] = {
 # (Euclidean in CIE-Lab space, scale ~0–100) is marked unblended
 _LAB_DIST_THRESHOLD = 20.0
 
-# minimum segment pixels that overlap the ROI before we consider the segment
+# minimum segment pixels inside the container contour before we consider it
 _MIN_OVERLAP_PX = 200
 
-# at least this fraction of the segment must lie within the ROI
+# at least this fraction of the segment must lie inside the container contour
 _MIN_ROI_OVERLAP_FRAC = 0.20
 
 
@@ -68,26 +69,26 @@ class SAMPipeline(BlendPipeline):
         if roi_mask is None:
             roi_mask = np.full((h, w), 255, dtype=np.uint8)
 
+        roi = crop_to_roi(image, roi_mask)
         self._build_generator()
 
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(roi.image, cv2.COLOR_BGR2RGB)
         masks = self._mask_generator.generate(rgb)
 
-        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        lab = cv2.cvtColor(roi.image, cv2.COLOR_BGR2LAB).astype(np.float32)
 
-        # dominant smoothie color = median LAB of all ROI pixels
-        roi_bool = roi_mask > 0
-        roi_lab_pixels = lab[roi_bool]
+        contour_bool = roi.mask > 0
+        roi_lab_pixels = lab[contour_bool]
         if len(roi_lab_pixels) == 0:
             dominant_lab = np.array([128.0, 128.0, 128.0])
         else:
             dominant_lab = np.median(roi_lab_pixels, axis=0)
 
-        unblended_mask = np.zeros((h, w), dtype=np.uint8)
+        unblended_crop = np.zeros(roi.image.shape[:2], dtype=np.uint8)
 
         for seg_dict in masks:
             seg: np.ndarray = seg_dict["segmentation"]  # bool H×W
-            seg_in_roi = seg & roi_bool
+            seg_in_roi = seg & contour_bool
 
             overlap_px = int(seg_in_roi.sum())
             if overlap_px < _MIN_OVERLAP_PX:
@@ -100,9 +101,10 @@ class SAMPipeline(BlendPipeline):
             dist = float(np.linalg.norm(mean_lab - dominant_lab))
 
             if dist > _LAB_DIST_THRESHOLD:
-                unblended_mask[seg] = 255
+                unblended_crop[seg_in_roi] = 255
 
-        unblended_mask = cv2.bitwise_and(unblended_mask, roi_mask)
+        unblended_crop = cv2.bitwise_and(unblended_crop, roi.mask)
+        unblended_mask = paste_mask(unblended_crop, roi)
         score = compute_blend_score(unblended_mask, roi_mask)
 
         return BlendResult(
@@ -115,5 +117,9 @@ class SAMPipeline(BlendPipeline):
                 "dominant_lab": dominant_lab.tolist(),
                 "lab_dist_threshold": _LAB_DIST_THRESHOLD,
                 "sam_model": self.config.sam_model,
+                "roi_crop": {
+                    "offset": list(roi.offset),
+                    "crop_shape": list(roi.image.shape[:2]),
+                },
             },
         )
