@@ -2,13 +2,14 @@
 Detect the smoothie region in a side-view image and return an ROI mask.
 
 In this rig the cup sits in a stainless-steel blender housing: the smoothie is
-the only strongly *saturated* object in frame (vivid color + the printed label),
-while the machine is desaturated gray metal. So the primary strategy is color
-saturation segmentation, which is robust to the cup being a tapered rectangle
-rather than a circle.
+the only strongly *chromatic* object in frame (vivid color), while the machine
+body is achromatic (white, black, gray metal). We exploit this by computing
+chroma in CIELAB space — perceptually uniform distance from the neutral axis —
+and applying Otsu to separate colorful smoothie pixels from the neutral
+background.
 
 Strategy:
-  1. Saturation threshold (Otsu) in HSV → largest filled contour (primary).
+  1. LAB chroma threshold (Otsu) → largest filled contour (primary).
   2. Full frame (last resort).
 
 Returns a filled binary mask (255 inside the smoothie region, 0 outside) at the
@@ -28,7 +29,7 @@ def detect_container(
     """
     Args:
         image:             BGR image (H x W x 3, uint8)
-        min_area_frac:     Reject saturation blobs smaller than this fraction of
+        min_area_frac:     Reject chroma blobs smaller than this fraction of
                            the frame (filters stray colored specks).
 
     Returns:
@@ -38,8 +39,7 @@ def detect_container(
     h, w = image.shape[:2]
     frame_area = h * w
 
-    # --- primary: saturation segmentation ---
-    mask, bbox = _saturation_roi(image, min_area_frac * frame_area)
+    mask, bbox = _chroma_roi(image, min_area_frac * frame_area)
     if mask is not None:
         return mask, bbox
 
@@ -47,20 +47,27 @@ def detect_container(
     return np.full((h, w), 255, dtype=np.uint8), None
 
 
-def _saturation_roi(image: np.ndarray, min_area: float) -> tuple[np.ndarray | None, BBox | None]:
+def _chroma_roi(image: np.ndarray, min_area: float) -> tuple[np.ndarray | None, BBox | None]:
+    """Segment colorful regions using LAB chroma (perceptual distance from gray)."""
     h, w = image.shape[:2]
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    sat = hsv[:, :, 1]
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
 
-    # Otsu adapts the saturated-vs-gray split per image (lighting varies).
-    _, sat_mask = cv2.threshold(sat, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # OpenCV LAB stores a,b in [0,255] centered at 128
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.hypot(a, b)
+
+    # Scale to uint8 for Otsu (max theoretical chroma ~181, clamp to 255)
+    chroma_u8 = np.clip(chroma, 0, 255).astype(np.uint8)
+
+    _, chroma_mask = cv2.threshold(chroma_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     # close gaps (label text, highlights) then drop specks
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    sat_mask = cv2.morphologyEx(sat_mask, cv2.MORPH_CLOSE, kernel)
-    sat_mask = cv2.morphologyEx(sat_mask, cv2.MORPH_OPEN, kernel)
+    chroma_mask = cv2.morphologyEx(chroma_mask, cv2.MORPH_CLOSE, kernel)
+    chroma_mask = cv2.morphologyEx(chroma_mask, cv2.MORPH_OPEN, kernel)
 
-    contours, _ = cv2.findContours(sat_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(chroma_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not contours:
         return None, None
 
@@ -68,7 +75,7 @@ def _saturation_roi(image: np.ndarray, min_area: float) -> tuple[np.ndarray | No
     if cv2.contourArea(largest) < min_area:
         return None, None
 
-    return _largest_filled(sat_mask)
+    return _largest_filled(chroma_mask)
 
 
 def _largest_filled(mask: np.ndarray) -> tuple[np.ndarray | None, BBox | None]:

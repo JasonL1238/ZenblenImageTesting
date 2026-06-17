@@ -31,7 +31,6 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 # allow running from repo root without installing
 sys.path.insert(0, str(Path(__file__).parent))
@@ -69,7 +68,7 @@ def run_single(
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
-    roi_mask, bbox = detect_container(image)
+    roi_mask, _ = detect_container(image)
 
     pipeline = load_pipeline(pipeline_name, config)
 
