@@ -9,6 +9,21 @@
 - Run all pipelines:`python run.py --pipeline all --image data/images/`
 - Batch compare:    `python run.py --pipeline all --image data/images/ --threshold 0.90`
 
+# Container detection (ROI)
+- SAM2 is the PRIORITY detector; classical colour-thresholding is the FALLBACK.
+  SAM is colour-agnostic and robust across shades; classical is fragile on tan/pale.
+- Single entry point: `from smoothie_cv.detection import detect_container`. It
+  dispatches in `config.detector_priority` order (default `["sam", "classical"]`),
+  falling back when a detector is unavailable or returns no plausible mask.
+- Module layout under `smoothie_cv/detection/`:
+  - `__init__.py`  → `detect_container()` dispatcher (SAM→classical) + public exports
+  - `sam.py`       → `detect_sam()`        — SAM2 fixed-prompt detector [PRIORITY]
+  - `classical.py` → `detect_classical()`  — colour-threshold detector  [FALLBACK]
+  - `common.py`    → shared helpers (classify, `flatten_roi_top`, `top_edge_roughness`, overlay)
+- Force one: `detect_container(img, prefer="classical")`, or `run.py --detector sam|classical`
+  (default `auto` = priority order).
+- Compare methods head-to-head: `python scripts/compare_detectors.py [--sample]`.
+
 # Code style
 - Type-hint all public function signatures
 - No hardcoded API keys — always read from environment variables

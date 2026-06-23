@@ -43,6 +43,12 @@ class Config:
     # Minimum LAB chroma (sqrt(a²+b²)) inside the ROI; rejects neutral metal/white.
     yellow_chroma_min: float = 6.0
 
+    # --- container detection (ROI) ---
+    # Order detectors are tried in. SAM2 is the priority detector (colour-agnostic,
+    # robust across shades); classical colour-thresholding is the fallback, used
+    # only when SAM is unavailable or returns no plausible mask.
+    detector_priority: list[str] = field(default_factory=lambda: ["sam", "classical"])
+
     # --- SAM2 ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
     sam_points_per_side: int = 32

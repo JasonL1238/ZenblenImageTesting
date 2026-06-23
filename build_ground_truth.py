@@ -19,7 +19,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from smoothie_cv.detection.container import detect_container, draw_container_overlay
+from smoothie_cv.detection import detect_container, draw_container_overlay
 
 RED_PINK_DIR = Path("data/images/red_pink")
 GT_DIR = Path("outputs/ground_truth")

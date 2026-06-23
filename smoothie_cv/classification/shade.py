@@ -15,7 +15,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from smoothie_cv.detection.container import detect_container
+from smoothie_cv.detection import detect_container
 
 ShadeLabel = Literal["red_pink", "yellow"]
 
@@ -48,7 +48,9 @@ def classify_smoothie_shade(image: np.ndarray) -> ShadeResult:
     Returns:
         ShadeResult with label and diagnostic LAB stats.
     """
-    roi_mask, _ = detect_container(image)
+    # Shade only needs a rough region for colour stats; force the fast, torch-free
+    # classical detector rather than paying SAM's cost for a bulk sorter.
+    roi_mask, _ = detect_container(image, prefer="classical")
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
 
     roi_bool = roi_mask > 0

@@ -1,5 +1,5 @@
 """
-Detect the smoothie region in a side-view image and return an ROI mask.
+Classical colour-threshold container detector — the FALLBACK detector.
 
 In this rig the cup sits in a stainless-steel blender housing: the smoothie is
 the only strongly *chromatic* object in frame (vivid color), while the machine
@@ -21,18 +21,29 @@ Yellow strategy:
 All branches apply a spatial crop (configurable margins) to exclude blender
 side panels and motor base before colour analysis, then translate back.
 
+This detector keys on colour, so it is fragile across shades (it can miss
+tan/pale fills and occasionally bleeds onto the machine deck) — which is why the
+SAM detector in ``sam.py`` is preferred. Shared geometry/colour helpers live in
+``common.py``; the SAM→classical dispatcher lives in ``__init__.py``.
+
 Returns a filled binary mask (255 inside the smoothie region, 0 outside) at the
 same resolution as the input image, plus a bounding box (x, y, w, h) or None.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
-from dataclasses import dataclass
-from enum import Enum
 
-BBox = tuple[int, int, int, int]
+from smoothie_cv.detection.common import (
+    BBox,
+    SmoothieType,
+    _classify_smoothie,
+    flatten_roi_top,
+    top_edge_roughness,
+)
 
 
 @dataclass(frozen=True)
@@ -45,35 +56,15 @@ class YellowRefineParams:
     chroma_min: float = 6.0        # min sqrt(a²+b²) to reject neutral metal/white
 
 
-class SmoothieType(Enum):
-    RED_PINK = "red_pink"
-    VIVID_YELLOW = "vivid_yellow"
-    PALE_YELLOW = "pale_yellow"
-
-
-def _classify_smoothie(image: np.ndarray) -> SmoothieType:
-    """Classify smoothie colour type from center crop median LAB values."""
-    h, w = image.shape[:2]
-    cy, cx = h // 2, w // 2
-    crop = image[cy - h // 6 : cy + h // 6, cx - w // 6 : cx + w // 6]
-    lab = cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)
-    med_a = float(np.median(lab[:, :, 1].astype(np.float32))) - 128.0
-    med_b = float(np.median(lab[:, :, 2].astype(np.float32))) - 128.0
-
-    if med_a > 8:
-        return SmoothieType.RED_PINK
-    elif med_b > 20:
-        return SmoothieType.VIVID_YELLOW
-    else:
-        return SmoothieType.PALE_YELLOW
-
-
-def detect_container(
+def detect_classical(
     image: np.ndarray,
     min_area_frac: float = 0.05,
     crop_x_frac: float = 0.10,
     crop_y_bot_frac: float = 0.10,
     yellow_params: YellowRefineParams | None = None,
+    flatten_top: bool = True,
+    top_tilt_max_deg: float = 10.0,
+    squiggle_thresh: float = 3.0,
 ) -> tuple[np.ndarray, BBox | None]:
     """
     Args:
@@ -86,6 +77,20 @@ def detect_container(
                            before colour analysis (blocks motor base hardware).
         yellow_params:     Tuning knobs for the yellow ROI refinement step.
                            Pass None to use defaults.
+        flatten_top:       Master switch for top-edge straightening. When True,
+                           the straight-line prior is applied ONLY to yellow/tan
+                           smoothies AND only when the detected top edge is
+                           actually squiggly (see ``squiggle_thresh``). Red/pink
+                           fills segment cleanly and are never flattened.
+        top_tilt_max_deg:  Maximum allowed tilt of the enforced top line from
+                           horizontal, in degrees (guards against runaway fits).
+        squiggle_thresh:   Roughness gate, in pixels (std of the high-frequency
+                           top-edge component; see ``top_edge_roughness``). The
+                           flatten only fires when
+                           ``top_edge_roughness(mask) >= squiggle_thresh`` — a
+                           clean/smoothly-curved top is left untouched. Default
+                           3.0 sits in the natural gap between clean (≤2.5) and
+                           jagged (≥3.6) tops in the sample set.
 
     Returns:
         roi_mask:  H x W uint8 (255 inside detected region, 0 outside)
@@ -99,24 +104,35 @@ def detect_container(
         yellow_params = YellowRefineParams()
 
     smoothie_type = _classify_smoothie(image)
+    is_yellow = smoothie_type in (SmoothieType.PALE_YELLOW, SmoothieType.VIVID_YELLOW)
 
-    if smoothie_type in (SmoothieType.PALE_YELLOW, SmoothieType.VIVID_YELLOW):
+    mask: np.ndarray | None = None
+    bbox: BBox | None = None
+
+    if is_yellow:
         coarse_mask, coarse_bbox = _yellow_b_channel_roi(
             image, min_area, crop_x_frac, crop_y_bot_frac,
         )
         if coarse_mask is not None:
             refined, rbbox = _refine_yellow_roi(image, coarse_mask, yellow_params)
             if refined is not None:
-                return refined, rbbox
-            return coarse_mask, coarse_bbox
+                mask, bbox = refined, rbbox
+            else:
+                mask, bbox = coarse_mask, coarse_bbox
 
     # RED_PINK or fallback from yellow branches
-    mask, bbox = _chroma_roi(image, min_area, crop_x_frac, crop_y_bot_frac)
-    if mask is not None:
-        return mask, bbox
+    if mask is None:
+        mask, bbox = _chroma_roi(image, min_area, crop_x_frac, crop_y_bot_frac)
 
-    # --- last resort: full frame ---
-    return np.full((h, w), 255, dtype=np.uint8), None
+    # --- last resort: full frame (top is already a straight line; skip flatten) ---
+    if mask is None:
+        return np.full((h, w), 255, dtype=np.uint8), None
+
+    # Straight-line prior: yellow/tan only, and only when the top is squiggly.
+    if flatten_top and is_yellow and top_edge_roughness(mask) >= squiggle_thresh:
+        mask, bbox = flatten_roi_top(mask, top_tilt_max_deg=top_tilt_max_deg)
+
+    return mask, bbox
 
 
 def _refine_yellow_roi(
@@ -326,27 +342,3 @@ def _chroma_roi(
     cv2.drawContours(full_mask, [largest_full], -1, 255, thickness=cv2.FILLED)
     x, y, bw, bh = cv2.boundingRect(largest_full)
     return full_mask, (x, y, bw, bh)
-
-
-def _largest_filled(mask: np.ndarray) -> tuple[np.ndarray | None, BBox | None]:
-    """Keep only the largest contour in ``mask``, fill it, and return (filled, bbox)."""
-    h, w = mask.shape[:2]
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None, None
-
-    largest = max(contours, key=cv2.contourArea)
-    filled = np.zeros((h, w), dtype=np.uint8)
-    cv2.drawContours(filled, [largest], -1, 255, thickness=cv2.FILLED)
-    x, y, bw, bh = cv2.boundingRect(largest)
-    return filled, (x, y, bw, bh)
-
-
-def draw_container_overlay(image: np.ndarray, roi_mask: np.ndarray | None) -> np.ndarray:
-    """Return a copy of image with the detected ROI boundary drawn in green."""
-    vis = image.copy()
-    if roi_mask is None or not np.any(roi_mask):
-        return vis
-    contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(vis, contours, -1, (0, 255, 0), 2)
-    return vis

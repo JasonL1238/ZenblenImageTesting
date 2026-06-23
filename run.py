@@ -36,7 +36,7 @@ import cv2
 sys.path.insert(0, str(Path(__file__).parent))
 
 from smoothie_cv.config import Config
-from smoothie_cv.detection.container import (
+from smoothie_cv.detection import (
     detect_container,
     draw_container_overlay,
     _classify_smoothie,
@@ -76,6 +76,7 @@ def run_single(
     image_path: Path,
     pipeline_name: str,
     config: Config,
+    detector: str | None = None,
 ) -> dict:
     image = cv2.imread(str(image_path))
     if image is None:
@@ -88,8 +89,13 @@ def run_single(
         L_max=config.yellow_L_max,
         chroma_min=config.yellow_chroma_min,
     )
-    roi_mask, _ = detect_container(image, yellow_params=yellow_params)
     smoothie_type = _classify_smoothie(image)
+
+    # ROI detection via the SAM-priority / classical-fallback dispatcher.
+    # `detector` (None = auto priority) maps to the dispatcher's `prefer`.
+    roi_mask, _bbox, det = detect_container(
+        image, config, prefer=detector, yellow_params=yellow_params, return_meta=True
+    )
 
     pipeline = load_pipeline(pipeline_name, config)
 
@@ -97,19 +103,19 @@ def run_single(
     result = pipeline.analyze(image, roi_mask)
     runtime_ms = (time.perf_counter() - t0) * 1000
 
-    # Place output in shade-based subfolder
+    # One subfolder per smoothie, grouped by shade: <run>/<shade>/<stem>/
     shade_dir = config.output_dir / _shade_subfolder(smoothie_type)
-    shade_dir.mkdir(parents=True, exist_ok=True)
+    smoothie_dir = shade_dir / image_path.stem
+    smoothie_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{image_path.stem}_{pipeline_name}"
 
-    # write ROI overlay
-    roi_vis = draw_container_overlay(image, roi_mask)
-    roi_path = shade_dir / f"{stem}_roi.png"
-    cv2.imwrite(str(roi_path), roi_vis)
+    # ROI overlay from the chosen detector
+    roi_path = smoothie_dir / f"{stem}_roi.png"
+    cv2.imwrite(str(roi_path), draw_container_overlay(image, roi_mask))
 
-    # write mask overlay (unblended region highlighted)
+    # mask overlay (unblended region highlighted), computed on the ROI
     mask_vis = overlay_mask(image, result.mask)
-    mask_path = shade_dir / f"{stem}_mask.png"
+    mask_path = smoothie_dir / f"{stem}_mask.png"
     cv2.imwrite(str(mask_path), mask_vis)
 
     # write JSON result
@@ -121,22 +127,24 @@ def run_single(
         "passed": result.passed,
         "threshold": config.threshold,
         "runtime_ms": round(runtime_ms, 1),
+        "detector": det["detector"],
+        "detector_fallback": det["fallback"],
+        "top_roughness": det["roughness"],
         "roi_path": str(roi_path),
         "mask_path": str(mask_path),
         "metadata": result.metadata,
     }
-    json_path = shade_dir / f"{stem}_result.json"
+    json_path = smoothie_dir / f"{stem}_result.json"
     json_path.write_text(json.dumps(record, indent=2))
 
     status = "PASS" if result.passed else "FAIL"
+    det_tag = f"  det={det['detector']}" + ("(fallback)" if det["fallback"] else "")
     print(
         f"[{pipeline_name}] {image_path.name}  "
         f"score={result.blend_score:.3f}  {status}  "
-        f"({runtime_ms:.0f} ms)"
+        f"({runtime_ms:.0f} ms){det_tag}"
     )
-    print(f"  roi   → {roi_path}")
-    print(f"  mask  → {mask_path}")
-    print(f"  json  → {json_path}")
+    print(f"  dir   → {smoothie_dir}")
     return record
 
 
@@ -144,6 +152,7 @@ def run_batch(
     image_dir: Path,
     pipeline_names: list[str],
     config: Config,
+    detector: str | None = None,
 ) -> list[dict]:
     images = sorted(image_dir.rglob("*.jpg")) + sorted(image_dir.rglob("*.png"))
     if not images:
@@ -154,7 +163,7 @@ def run_batch(
     for img_path in images:
         for pname in pipeline_names:
             try:
-                row = run_single(img_path, pname, config)
+                row = run_single(img_path, pname, config, detector=detector)
                 rows.append(row)
             except NotImplementedError as e:
                 print(f"[{pname}] SKIP — {e}")
@@ -267,11 +276,15 @@ def main() -> None:
                         help="Path to config.yaml (optional)")
     parser.add_argument("--output-dir", default=None,
                         help="Directory to write outputs (default: outputs/)")
+    parser.add_argument("--detector", choices=["auto", "sam", "classical"], default="auto",
+                        help="ROI detector. 'auto' = SAM priority, classical fallback "
+                             "(default). 'sam'/'classical' force one.")
     args = parser.parse_args()
 
     config = Config.load(args.config)
     if args.threshold is not None:
         config.threshold = args.threshold
+    detector = None if args.detector == "auto" else args.detector
     output_root = Path(args.output_dir) if args.output_dir is not None else config.output_dir
 
     image_path = Path(args.image)
@@ -289,11 +302,11 @@ def main() -> None:
 
     records: list[dict] = []
     if image_path.is_dir():
-        records = run_batch(image_path, pipeline_names, config)
+        records = run_batch(image_path, pipeline_names, config, detector=detector)
     else:
         for pname in pipeline_names:
             try:
-                records.append(run_single(image_path, pname, config))
+                records.append(run_single(image_path, pname, config, detector=detector))
             except NotImplementedError as e:
                 print(f"[{pname}] SKIP — {e}")
 
