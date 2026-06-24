@@ -1,24 +1,22 @@
 """
 Container detection — public API.
 
-Priority: **SAM2 is the primary detector; classical colour-thresholding is the
-fallback.**  SAM is colour-agnostic and position-tolerant and never failed
-catastrophically across the sample set; the classical detector is fragile on
-tan/pale fills, so it is used only when SAM is unavailable (not installed / no
-checkpoint) or returns no plausible mask.
+Two active detectors, in priority order:
+  SAM2      fixed-prompt, colour-agnostic, robust across all shades  [PRIORITY]
+  Classical colour-threshold + flatten_roi_top                        [FALLBACK]
 
 Layout:
-  common.py     shared, detector-agnostic helpers (types, classify, geometry)
-  sam.py        SAM2 fixed-prompt detector        — detect_sam()   [PRIORITY]
-  classical.py  colour-threshold detector         — detect_classical()  [FALLBACK]
-  __init__.py   detect_container() dispatcher (this file)
+  common.py     shared helpers (types, classify, geometry)
+  sam.py        SAM2 fixed-prompt detector    — detect_sam()         [PRIORITY]
+  classical.py  colour-threshold detector     — detect_classical()   [FALLBACK]
 
 Callers should use ``detect_container`` and let the dispatcher choose; pass
-``prefer=`` to force a specific detector (e.g. ``prefer="classical"`` for a fast,
-torch-free path).
+``prefer=`` to force one (e.g. ``prefer="classical"`` for a fast, torch-free path).
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 import numpy as np
 
@@ -46,7 +44,37 @@ __all__ = [
     "SmoothieType",
     "YellowRefineParams",
     "BBox",
+    "DETECTORS",
 ]
+
+
+def _adapt_sam(
+    image: np.ndarray,
+    config: Config,
+    *,
+    yellow_params: YellowRefineParams | None = None,
+    flatten_top: bool = True,
+) -> tuple[np.ndarray, BBox | None]:
+    from smoothie_cv.detection.sam import detect_sam  # lazy: classical callers skip torch
+    return detect_sam(image, config, flatten_top=flatten_top)
+
+
+def _adapt_classical(
+    image: np.ndarray,
+    config: Config,
+    *,
+    yellow_params: YellowRefineParams | None = None,
+    flatten_top: bool = True,
+) -> tuple[np.ndarray, BBox | None]:
+    return detect_classical(image, yellow_params=yellow_params, flatten_top=flatten_top)
+
+
+# ── Detector registry ─────────────────────────────────────────────────────────
+DETECTORS: dict[str, Callable] = {
+    "sam":       _adapt_sam,
+    "classical": _adapt_classical,
+}
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _is_plausible(mask: np.ndarray | None) -> bool:
@@ -64,14 +92,10 @@ def _run_detector(
     yellow_params: YellowRefineParams | None,
     flatten_top: bool,
 ) -> tuple[np.ndarray, BBox | None]:
-    """Run a single named detector. Raises on unavailability/failure."""
-    if name == "sam":
-        # imported lazily so classical-only callers never pay the torch import
-        from smoothie_cv.detection.sam import detect_sam
-        return detect_sam(image, config, flatten_top=flatten_top)
-    if name == "classical":
-        return detect_classical(image, yellow_params=yellow_params, flatten_top=flatten_top)
-    raise ValueError(f"Unknown detector {name!r}. Known: {DETECTOR_PRIORITY}")
+    """Run a single named detector via the registry. Raises on unavailability/failure."""
+    if name not in DETECTORS:
+        raise ValueError(f"Unknown detector {name!r}. Registered: {list(DETECTORS)}")
+    return DETECTORS[name](image, config, yellow_params=yellow_params, flatten_top=flatten_top)
 
 
 def detect_container(

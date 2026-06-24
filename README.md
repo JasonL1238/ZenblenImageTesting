@@ -22,7 +22,6 @@ python run.py --pipeline all --image data/images/ --threshold 0.90
 | `classical` | OpenCV variance + Canny edges (default, no extra deps) |
 | `vlm` | Claude vision API — requires `ANTHROPIC_API_KEY` |
 | `sam` | SAM2 segmentation — requires checkpoint in `checkpoints/` |
-| `segformer` | HuggingFace SegFormer model |
 
 ## Outputs
 

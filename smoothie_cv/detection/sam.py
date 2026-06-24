@@ -28,12 +28,19 @@ import numpy as np
 from smoothie_cv.config import Config
 from smoothie_cv.detection.common import BBox, _largest_filled, flatten_roi_top
 
-# maps Config.sam_model string → (hydra config yaml, checkpoint filename)
+# maps Config.sam_model string → (hydra config name, checkpoint filename)
+# Config names are resolved relative to pkg://sam2 by Hydra.
 _MODEL_MAP: dict[str, tuple[str, str]] = {
-    "sam2_hiera_tiny": ("sam2_hiera_t.yaml", "sam2_hiera_tiny.pt"),
-    "sam2_hiera_small": ("sam2_hiera_s.yaml", "sam2_hiera_small.pt"),
-    "sam2_hiera_base_plus": ("sam2_hiera_b+.yaml", "sam2_hiera_base_plus.pt"),
-    "sam2_hiera_large": ("sam2_hiera_l.yaml", "sam2_hiera_large.pt"),
+    # SAM 2.0
+    "sam2_hiera_tiny": ("configs/sam2/sam2_hiera_t", "sam2_hiera_tiny.pt"),
+    "sam2_hiera_small": ("configs/sam2/sam2_hiera_s", "sam2_hiera_small.pt"),
+    "sam2_hiera_base_plus": ("configs/sam2/sam2_hiera_b+", "sam2_hiera_base_plus.pt"),
+    "sam2_hiera_large": ("configs/sam2/sam2_hiera_l", "sam2_hiera_large.pt"),
+    # SAM 2.1 (updated weights, same architecture, better boundary quality)
+    "sam2.1_hiera_tiny": ("configs/sam2.1/sam2.1_hiera_t", "sam2.1_hiera_tiny.pt"),
+    "sam2.1_hiera_small": ("configs/sam2.1/sam2.1_hiera_s", "sam2.1_hiera_small.pt"),
+    "sam2.1_hiera_base_plus": ("configs/sam2.1/sam2.1_hiera_b+", "sam2.1_hiera_base_plus.pt"),
+    "sam2.1_hiera_large": ("configs/sam2.1/sam2.1_hiera_l", "sam2.1_hiera_large.pt"),
 }
 
 # plausible smoothie area as a fraction of the frame; masks outside this band

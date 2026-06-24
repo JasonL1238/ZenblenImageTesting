@@ -12,3 +12,6 @@ outputs/
 
 # Environment / secrets
 .env
+
+# Python virtualenv (use conda base /opt/miniconda3 instead)
+.venv/

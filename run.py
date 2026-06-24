@@ -46,7 +46,7 @@ from smoothie_cv.detection import (
 from smoothie_cv.scoring.metrics import overlay_mask
 
 
-PIPELINE_NAMES = ["classical", "vlm", "sam", "segformer"]
+PIPELINE_NAMES = ["classical", "vlm", "sam"]
 
 
 def load_pipeline(name: str, config: Config):
@@ -59,9 +59,6 @@ def load_pipeline(name: str, config: Config):
     if name == "sam":
         from smoothie_cv.pipelines.sam import SAMPipeline
         return SAMPipeline(config)
-    if name == "segformer":
-        from smoothie_cv.pipelines.segformer import SegFormerPipeline
-        return SegFormerPipeline(config)
     raise ValueError(f"Unknown pipeline: {name!r}. Choose from {PIPELINE_NAMES}")
 
 

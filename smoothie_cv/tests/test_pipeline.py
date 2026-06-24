@@ -151,14 +151,3 @@ class TestSAMPipelineInit:
         pipeline._mask_generator = None  # reset lazy cache
         with pytest.raises((ImportError, Exception)):
             pipeline._build_generator()
-
-
-# ---------------------------------------------------------------------------
-# SegFormer pipeline — must raise NotImplementedError
-# ---------------------------------------------------------------------------
-
-class TestSegFormerStub:
-    def test_raises_not_implemented(self):
-        from smoothie_cv.pipelines.segformer import SegFormerPipeline
-        with pytest.raises(NotImplementedError):
-            SegFormerPipeline(Config()).analyze(_solid_image())

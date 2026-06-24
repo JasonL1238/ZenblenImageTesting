@@ -42,15 +42,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from smoothie_cv.config import Config
 from smoothie_cv.detection import (
-    draw_container_overlay, flatten_roi_top, top_edge_roughness, _classify_smoothie,
+    DETECTORS, draw_container_overlay, flatten_roi_top, top_edge_roughness, _classify_smoothie,
 )
-from smoothie_cv.detection.classical import detect_classical
-from smoothie_cv.detection.sam import detect_sam
 
 ROOT = Path(__file__).resolve().parents[1]
 
-METHODS = ["classical", "sam", "sam_flat"]
-_TAG_COLOR = {"classical": (60, 80, 200), "sam": (235, 111, 31), "sam_flat": (67, 160, 46)}
+# sam_flat is derived from sam (no extra forward pass) — always appended after registry methods
+METHODS = list(DETECTORS) + (["sam_flat"] if "sam" in DETECTORS else [])
+
+_KNOWN_COLORS: dict[str, tuple] = {
+    "classical": (60, 80, 200),
+    "sam":       (235, 111, 31),
+    "sam_flat":  (67, 160, 46),
+}
+_FALLBACK_PALETTE = [(180, 60, 180), (60, 180, 180), (180, 180, 60), (100, 100, 200)]
+_TAG_COLOR = {
+    m: _KNOWN_COLORS.get(m, _FALLBACK_PALETTE[i % len(_FALLBACK_PALETTE)])
+    for i, m in enumerate(METHODS)
+}
 
 # stratified sample for --sample (tan-jagged / vivid / red)
 SAMPLE_IDS = ["054671e6", "62ed4ae1", "6a9960fb", "5142385b",
@@ -58,30 +67,38 @@ SAMPLE_IDS = ["054671e6", "62ed4ae1", "6a9960fb", "5142385b",
 
 
 def detect_all(image: np.ndarray, config: Config) -> dict:
-    """Run every method once and return {method: (mask, bbox, meta)}."""
-    out: dict = {}
+    """Run every registered detector + derive sam_flat. Returns {method: metrics_dict}."""
     fa = float(image.shape[0] * image.shape[1])
+    h, w = image.shape[:2]
+    result: dict = {}
 
-    t = time.perf_counter()
-    cmask, cbbox = detect_classical(image)
-    out["classical"] = (cmask, cbbox, (time.perf_counter() - t) * 1000)
-
-    t = time.perf_counter()
-    smask, sbbox = detect_sam(image, config, flatten_top=False)
-    sam_ms = (time.perf_counter() - t) * 1000
-    out["sam"] = (smask, sbbox, sam_ms)
-
-    fmask, fbbox = flatten_roi_top(smask)         # derive — no second SAM call
-    out["sam_flat"] = (fmask, fbbox, sam_ms)
-
-    result = {}
-    for m, (mask, bbox, ms) in out.items():
-        result[m] = {
-            "mask": mask, "bbox": bbox,
-            "ms": round(ms, 1),
+    for name, adapter in DETECTORS.items():
+        # sam: flatten_top=False so we can show raw vs flattened (sam_flat); others use default
+        ft = name != "sam"
+        t = time.perf_counter()
+        try:
+            mask, bbox = adapter(image, config, flatten_top=ft)
+        except Exception as exc:
+            print(f"  [{name}] FAILED: {type(exc).__name__}: {exc}")
+            mask = np.zeros((h, w), dtype=np.uint8)
+            bbox = None
+        ms = round((time.perf_counter() - t) * 1000, 1)
+        result[name] = {
+            "mask": mask, "bbox": bbox, "ms": ms,
             "area_frac": round(float((mask > 0).sum()) / fa, 3),
             "roughness": round(top_edge_roughness(mask), 2),
         }
+
+    # sam_flat: derived from sam result — no second SAM forward pass
+    if "sam" in result:
+        fmask, fbbox = flatten_roi_top(result["sam"]["mask"])
+        result["sam_flat"] = {
+            **result["sam"],
+            "mask": fmask, "bbox": fbbox,
+            "area_frac": round(float((fmask > 0).sum()) / fa, 3),
+            "roughness": round(top_edge_roughness(fmask), 2),
+        }
+
     return result
 
 
@@ -125,7 +142,12 @@ def build_gallery(out_dir: Path, rows: list[dict]) -> Path:
             f'<img src="{uri(r["composite"])}">'
             f'<div class="stats">{stats}</div></figure>'
         )
-    html = f"""<title>Detection methods per smoothie — classical | sam | sam_flat</title>
+    methods_label = " | ".join(METHODS)
+    legend = " ".join(
+        f'<span class="chip" style="background:rgb{(_TAG_COLOR[m][2], _TAG_COLOR[m][1], _TAG_COLOR[m][0])}">{m}</span>'
+        for m in METHODS
+    )
+    html = f"""<title>Detection methods per smoothie — {methods_label}</title>
 <style>
  body{{margin:0;font:13px/1.45 -apple-system,system-ui,sans-serif;background:#0e1116;color:#e6edf3}}
  header{{padding:20px 26px;border-bottom:1px solid #222;background:#11161d}}
@@ -140,12 +162,9 @@ def build_gallery(out_dir: Path, rows: list[dict]) -> Path:
  .stats{{padding:6px 10px;font-size:11px;color:#9aa7b4;font-family:ui-monospace,monospace}}
  .stats b{{color:#cdd9e5}}
 </style>
-<header><h1>Container detection per smoothie — classical | sam | sam_flat</h1>
-<div class="meta">Green contour = detected ROI · {len(rows)} smoothies · each row stitches the three methods left→right · stats = top-edge roughness(px)/area-fraction</div>
-<div class="legend">
- <span class="chip" style="background:rgb(200,80,60)">classical</span>
- <span class="chip" style="background:rgb(31,111,235)">sam</span>
- <span class="chip" style="background:rgb(46,160,67)">sam_flat</span></div>
+<header><h1>Container detection per smoothie — {methods_label}</h1>
+<div class="meta">Green contour = detected ROI · {len(rows)} smoothies · each row stitches the methods left→right · stats = top-edge roughness(px)/area-fraction</div>
+<div class="legend">{legend}</div>
 </header>
 <div class="grid">{''.join(cards)}</div>
 """
@@ -197,9 +216,8 @@ def main() -> None:
             json.dumps({"image": str(p), "shade": shade, "methods": metrics}, indent=2))
 
         rows.append({"id": sid, "shade": shade, "composite": composite, "metrics": metrics})
-        print(f"  [{i:>3}/{len(paths)}] {sid} ({shade:12}) "
-              f"rough classical={metrics['classical']['roughness']:.1f} "
-              f"sam={metrics['sam']['roughness']:.1f} sam_flat={metrics['sam_flat']['roughness']:.1f}")
+        rough_parts = " ".join(f"{m}={metrics[m]['roughness']:.1f}" for m in METHODS)
+        print(f"  [{i:>3}/{len(paths)}] {sid} ({shade:12}) rough {rough_parts}")
 
     gallery = build_gallery(out_dir, rows)
     print(f"\nWrote {len(rows)} per-smoothie folders under {out_dir}")
