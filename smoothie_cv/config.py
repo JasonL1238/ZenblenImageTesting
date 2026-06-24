@@ -72,12 +72,17 @@ class Config:
     # accepted seed into contiguous pixels above a LOWER ΔE threshold to recover the
     # full extent. Seeded growth keeps precision: faint texture/glare with no seed of
     # its own never grows. (Fixes "got part of the chunk but not the whole chunk".)
-    dev_grow_k_sigma: float = 1.5       # grow threshold = mean + this·σ of ΔE (< dev_k_sigma)
-    dev_grow_min_delta_e: float = 10.0  # floor for the grow threshold (tight: avoids the
-                                        # grow field connecting across logo / meniscus)
-    dev_grow_max_iter: int = 10         # bound growth to ~10 px from the seed: fills a
-                                        # chunk's margin but can't crawl along a logo word
-                                        # or the meniscus arc into a runaway mask
+    # Growth is DIRECTIONAL: a chunk's faint margin/tail (fading toward smoothie colour)
+    # deviates from the local base in the SAME colour direction as the chunk core (e.g.
+    # redder + darker), just with smaller magnitude. So we grow each seed into contiguous
+    # pixels whose deviation-from-base vector PROJECTS strongly onto the seed's mean
+    # deviation direction — this captures the tail (same direction, low magnitude) that a
+    # raw-ΔE-magnitude threshold drops, while uniform smoothie (no consistent direction)
+    # and off-direction glints are excluded.
+    dev_grow_proj_thr: float = 7.0      # min projection (LAB units) onto the chunk's
+                                        # signature direction for a pixel to join
+    dev_grow_max_iter: int = 25         # bound growth to ~25 px from the seed (reach the
+                                        # tail, but can't crawl across the whole cup)
     dev_grow_min_seed_area: int = 200   # only GROW seeds at least this big (a confident
                                         # chunk core worth completing). Tiny marginal seeds
                                         # (logo letter, rim glare, lone fleck) are kept as-is

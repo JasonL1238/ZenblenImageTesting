@@ -55,6 +55,19 @@
     (b) the colour cues on dark/chroma, (c) foam cutoff raised 0.12→0.16 (the meniscus
     band just below the old cut fired the relaxed paths; real chunks sit at y_frac≥0.18).
     Net on the 92-image set: 21→27 flagged, recovering 6 real colour-similar chunks.
+- After acceptance, each confident seed (≥ `dev_grow_min_seed_area`) is DIRECTIONALLY
+  grown: the gates mask a chunk's high-contrast CORE, but its faint margin/tail (fading
+  toward smoothie colour) deviates from base in the SAME colour direction, just weaker.
+  Grow into contiguous pixels whose deviation projects ≥ `dev_grow_proj_thr` onto the
+  seed's mean deviation direction (`_reconstruct`, distance-bounded by `dev_grow_max_iter`,
+  reusing the glare/bright/foam exclusions). Completes the chunk (e.g. 4c68's lighter
+  tail) without bleeding into smoothie/logo. Verdict-stable: still 27 flagged.
+- KNOWN LIMIT: scattered tiny low-contrast flecks (dE≈8–12, <90px) on red/pink cups are
+  NOT detected. They sit at the SAME local-contrast level as benign texture on truly
+  well-blended cups (verified: a local black-tophat fires ~equally on clean 2e7754a and
+  on chunky 4c68), so no global OR local threshold separates them without flooding FPs.
+  This is a signal-floor limit, not a tuning gap — leave it unless a different sensor /
+  per-region model is introduced.
 - Validate across the dataset: `python scripts/validate_chunks.py` (uses cached SAM
   ROIs in `outputs/roi_cache/`; regenerate with `python scripts/cache_sam_rois.py`).
   Writes a clean report to `outputs/report/`: `flagged.png` (flagged smoothies,

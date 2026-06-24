@@ -136,9 +136,12 @@ class ClassicalCVPipeline(BlendPipeline):
         n, labels, stats, cents = cv2.connectedComponentsWithStats(clean, connectivity=8)
         logo_labels = self._logo_text_labels(stats, cents, n, roi_h, roi_w)
 
+        # per-pixel deviation vector from local base (for directional growth below)
+        dev = lab - base
+
         roi_area = int((roi_mask > 0).sum())
         out = np.zeros(roi_mask.shape, np.uint8)
-        grow_seeds = np.zeros(roi_mask.shape, np.uint8)  # subset large enough to grow
+        grow_seed_masks: list[np.ndarray] = []  # seeds large enough to grow
         for lab_i in range(1, n):
             if lab_i in logo_labels:
                 continue
@@ -195,34 +198,36 @@ class ClassicalCVPipeline(BlendPipeline):
             if compact or colour_cued:
                 out[comp_mask] = 255
                 if area >= cfg.dev_grow_min_seed_area:
-                    grow_seeds[comp_mask] = 255
+                    grow_seed_masks.append(comp_mask)
 
-        # hysteresis grow: the gates above mask each chunk's high-contrast CORE; its
-        # softer margin (fading toward smoothie colour) is below the seed threshold and
-        # got dropped, leaving the chunk only partly covered. Grow the (large) accepted
-        # seeds into contiguous pixels above a LOWER ΔE threshold to fill the full extent.
-        # The growth field reuses the SAME exclusions (glare/bright-neutral/foam) so a
-        # chunk can't grow into a highlight or the foam band; seeded growth means faint
-        # texture elsewhere never starts a new blob, so precision is unchanged. Only seeds
-        # >= dev_grow_min_seed_area grow — a marginal speck must not be amplified into a
-        # flag — but ALL accepted seeds (grown or not) remain in the output.
-        if grow_seeds.any():
-            low_thr = max(vals.mean() + cfg.dev_grow_k_sigma * vals.std(),
-                          cfg.dev_grow_min_delta_e)
-            grow_field = ((dE >= low_thr) & mi).astype(np.uint8) * 255
-            grow_field[glare] = 0
-            grow_field[bright_neutral] = 0
-            grow_field[:foam_cut, :] = 0
-            grown = self._reconstruct(grow_seeds, grow_field, cfg.dev_grow_max_iter)
-            out = cv2.bitwise_or(out, grown)
+        # directional grow: the gates above mask each chunk's high-contrast CORE; its
+        # softer margin/tail (fading toward smoothie colour) deviates from base in the
+        # SAME colour direction as the core but with smaller magnitude, so a raw-ΔE
+        # threshold drops it and the chunk is only partly covered. Grow each (large) seed
+        # into contiguous pixels whose deviation projects strongly onto that seed's own
+        # signature direction. Same exclusions (glare/bright-neutral/foam) apply, growth
+        # is distance-bounded, and only confident seeds grow — so a marginal speck is
+        # never amplified into a flag and growth can't crawl across the cup.
+        excluded = glare | bright_neutral
+        for seed_mask in grow_seed_masks:
+            sig = dev[seed_mask].mean(axis=0)        # chunk's mean deviation direction
+            norm = float(np.linalg.norm(sig))
+            if norm < 1e-3:
+                continue
+            proj = (dev * (sig / norm)).sum(axis=2)  # how far each pixel deviates that way
+            field = ((proj >= cfg.dev_grow_proj_thr) & mi).astype(np.uint8) * 255
+            field[excluded] = 0
+            field[:foam_cut, :] = 0
+            seed = seed_mask.astype(np.uint8) * 255
+            out = cv2.bitwise_or(out, self._reconstruct(seed, field, cfg.dev_grow_max_iter))
         return out
 
     @staticmethod
     def _reconstruct(seeds: np.ndarray, field: np.ndarray, max_iter: int) -> np.ndarray:
-        """Morphological reconstruction by dilation: grow `seeds` within `field`
-        (geodesic dilation to stability). Recovers a chunk's full extent from its core."""
+        """Geodesic dilation of `seeds` within `field` (bounded), retaining the seed.
+        Recovers a chunk's full extent from its confirmed core."""
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        cur = cv2.bitwise_and(seeds, field) | seeds  # seeds are always retained
+        cur = seeds.copy()
         for _ in range(max_iter):
             nxt = cv2.bitwise_and(cv2.dilate(cur, k), field) | seeds
             if np.array_equal(nxt, cur):
