@@ -18,11 +18,47 @@
 - Module layout under `smoothie_cv/detection/`:
   - `__init__.py`  → `detect_container()` dispatcher (SAM→classical) + public exports
   - `sam.py`       → `detect_sam()`        — SAM2 fixed-prompt detector [PRIORITY]
-  - `classical.py` → `detect_classical()`  — colour-threshold detector  [FALLBACK]
+  - `classical.py` → `detect_classical()`  — colour-threshold + flatten [FALLBACK]
   - `common.py`    → shared helpers (classify, `flatten_roi_top`, `top_edge_roughness`, overlay)
 - Force one: `detect_container(img, prefer="classical")`, or `run.py --detector sam|classical`
   (default `auto` = priority order).
 - Compare methods head-to-head: `python scripts/compare_detectors.py [--sample]`.
+
+# Unblended-chunk detection (inside ROI)
+- After container detection, `ClassicalCVPipeline` finds unblended chunks inside
+  the ROI. Two methods via `config.classical_method`:
+  - `"deviation"` (DEFAULT) — colour-agnostic local-deviation: a chunk is a patch
+    whose LAB colour deviates from the local base (masked large-kernel blur).
+    Adaptive threshold (mean + k·σ), so it works on any smoothie shade.
+  - `"canny"` — edge-boundary; only catches chunk RIMS, not bodies. Kept as a fallback.
+- The "zenblen" LOGO is the systematic false positive — its colour/brightness/shape
+  overlaps real chunks differently per smoothie shade, so NO single pixel threshold
+  separates them. Handled by `_logo_text_labels()`: the logo is a horizontal ROW of
+  similar-height marks spanning a wide extent; a chunk is a lone compact blob. Logo
+  components are detected from the SAME ΔE map that fires the FP, then excluded.
+- Chunks pass via THREE acceptance paths + foam-band cutoff + bright-neutral exclusion
+  (cream logo/glare). Each colour-cued path carries a precision-preserving cue, so it
+  can relax shape (`dev_relaxed_min_area`, `dev_relaxed_aspect_hi`) without flooding FPs:
+  - compact path — area + solidity + extent + aspect + a strong deviation
+    (`dev_compact_min_delta_e`). No colour cue, so precision rests on shape + ΔE.
+  - dark path — relaxed shape but the component must be distinctly DARKER than the
+    local base (`dev_dark_dL`). Recovers subtle chunks (a dissolving chunk's thin dark
+    rim, e.g. yellow/62ed) that fail the compact gate. Darkness PRESERVES precision:
+    logo/glare are brighter than base, so they never pass the dark path.
+  - chroma path — relaxed shape but the component must be more SATURATED than the local
+    base (`dev_chroma_dC`). Recovers HUE-similar chunks that are NOT darker — orange/amber
+    lumps on a yellow smoothie (e.g. cf4d4c5, 99b2d39, 86240c8) deviate <16 ΔE and aren't
+    dark, so compact+dark both miss them. Saturation PRESERVES precision the same way
+    darkness does: glare/highlights/logo DESATURATE (ΔchromaC < 0), so they never pass.
+  - Tuning note: the global ΔE floor was lowered 16→12 so hue-similar chunks form
+    components at all; precision is then held by (a) compact path keeping the 16 floor,
+    (b) the colour cues on dark/chroma, (c) foam cutoff raised 0.12→0.16 (the meniscus
+    band just below the old cut fired the relaxed paths; real chunks sit at y_frac≥0.18).
+    Net on the 92-image set: 21→27 flagged, recovering 6 real colour-similar chunks.
+- Validate across the dataset: `python scripts/validate_chunks.py` (uses cached SAM
+  ROIs in `outputs/roi_cache/`; regenerate with `python scripts/cache_sam_rois.py`).
+  Writes a clean report to `outputs/report/`: `flagged.png` (flagged smoothies,
+  original vs detection side-by-side), `scores.csv`, `README.md`, `overlays/` (all 92).
 
 # Code style
 - Type-hint all public function signatures
