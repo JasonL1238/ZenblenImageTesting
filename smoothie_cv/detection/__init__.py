@@ -64,9 +64,12 @@ def _adapt_classical(
     config: Config,
     *,
     yellow_params: YellowRefineParams | None = None,
-    flatten_top: bool = True,
+    flatten_top: bool | None = None,
 ) -> tuple[np.ndarray, BBox | None]:
-    return detect_classical(image, yellow_params=yellow_params, flatten_top=flatten_top)
+    # Classical already gates its own flatten internally (yellow + squiggle), so
+    # AUTO (None) maps to its default-on behaviour; True/False force as usual.
+    classical_flatten = True if flatten_top is None else flatten_top
+    return detect_classical(image, yellow_params=yellow_params, flatten_top=classical_flatten)
 
 
 # ── Detector registry ─────────────────────────────────────────────────────────
@@ -104,7 +107,7 @@ def detect_container(
     *,
     prefer: str | list[str] | None = None,
     yellow_params: YellowRefineParams | None = None,
-    flatten_top: bool = True,
+    flatten_top: bool | None = None,
     return_meta: bool = False,
 ):
     """Detect the smoothie ROI. **SAM2 is the priority detector; classical is the fallback.**
@@ -119,8 +122,11 @@ def detect_container(
         prefer:       Override the order. A single name ("sam"/"classical") or an
                       explicit list. Defaults to ``config.detector_priority``.
         yellow_params: Tuning knobs forwarded to the classical detector.
-        flatten_top:  Apply the straight-line top prior (yellow-gated in classical,
-                      unconditional in SAM).
+        flatten_top:  Top-edge prior policy (raw mask is primary). ``None``
+                      (default) = AUTO: flatten only a too-jagged top — SAM gates
+                      on ``config.sam_top_roughness_max``, classical on its own
+                      yellow+squiggle rule. ``True``/``False`` force the prior
+                      on/off for both detectors.
         return_meta:  If True, also return a dict
                       ``{"detector", "fallback", "roughness"}``.
 

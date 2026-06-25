@@ -43,6 +43,29 @@ def _label(img, lines, color):
     return img
 
 
+def _roi_strip(img, roi_mask):
+    """Visualize the detected container ROI: dim everything outside the mask and
+    draw the ROI boundary in green."""
+    vis = img.astype(np.float32)
+    outside = roi_mask == 0
+    vis[outside] *= 0.30
+    vis = vis.astype(np.uint8)
+    cnts, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(vis, cnts, -1, (0, 255, 0), 2)
+    return vis
+
+
+def _triptych(img, roi_mask, chunk_mask, score, px):
+    """[ original | ROI mask | chunk detection ] for one smoothie."""
+    orig = _label(img.copy(), ["original"], (255, 255, 255))
+    roi_vis = _label(_roi_strip(img, roi_mask), ["ROI mask"], (0, 255, 0))
+    det = overlay_mask(img, chunk_mask, color=(255, 0, 0), alpha=0.55)
+    verdict = "CHUNKS" if score < FLAG_SCORE else "clean"
+    det = _label(det, [f"detect: {verdict}", f"blend {score:.3f}  {px}px"], (80, 160, 255))
+    gap = np.full((img.shape[0], 6, 3), 40, np.uint8)
+    return np.hstack([orig, gap, roi_vis, gap, det])
+
+
 def main() -> None:
     OVERLAYS.mkdir(parents=True, exist_ok=True)
     cfg = Config()
@@ -63,7 +86,9 @@ def main() -> None:
         rows.append({"stem": p.stem, "score": round(r.blend_score, 4),
                      "chunk_pixels": px, "verdict": verdict})
         vis = overlay_mask(img, r.mask, color=(255, 0, 0), alpha=0.55)
-        cv2.imwrite(str(OVERLAYS / f"{p.stem}.png"), vis)
+        # per-image drill-down: original | ROI mask | chunk detection
+        cv2.imwrite(str(OVERLAYS / f"{p.stem}.png"),
+                    _triptych(img, roi, r.mask, r.blend_score, px))
         originals[p.stem] = (img, vis, r.blend_score, px)
 
     # ── one readable view: only the flagged smoothies, sorted worst-first ──

@@ -26,7 +26,14 @@ from __future__ import annotations
 import numpy as np
 
 from smoothie_cv.config import Config
-from smoothie_cv.detection.common import BBox, _largest_filled, flatten_roi_top
+from smoothie_cv.detection.common import (
+    BBox,
+    _largest_filled,
+    extend_roi_to_gasket,
+    flatten_roi_top,
+    refine_cup_sides,
+    top_edge_roughness,
+)
 
 # maps Config.sam_model string → (hydra config name, checkpoint filename)
 # Config names are resolved relative to pkg://sam2 by Hydra.
@@ -99,7 +106,7 @@ def detect_sam(
     image: np.ndarray,
     config: Config | None = None,
     model_name: str | None = None,
-    flatten_top: bool = False,
+    flatten_top: bool | None = None,
     top_tilt_max_deg: float = 10.0,
 ) -> tuple[np.ndarray, BBox | None]:
     """Detect the smoothie region with SAM2 and a fixed centre-point prompt.
@@ -108,12 +115,18 @@ def detect_sam(
         image:       BGR image (H x W x 3, uint8)
         config:      Config (used for ``sam_model``); defaults to ``Config()``.
         model_name:  Explicit SAM2 model name; overrides ``config.sam_model``.
-        flatten_top: If True, straighten the top edge of SAM's mask with the
-                     shared ``flatten_roi_top`` prior. SAM reliably finds the cup
-                     body across all shades but leaves a jagged top that bleeds
-                     into foam; this replaces it with a clean straight fill line.
-                     Unlike the classical detector this is applied regardless of
-                     shade, since SAM's top jaggedness is colour-independent.
+        flatten_top: Top-edge prior policy. The RAW SAM mask is primary; the
+                     straight-line ``flatten_roi_top`` prior is a fallback for
+                     jagged ("weird") tops whose ragged rim would drag the
+                     foam/meniscus band into the ROI and misfire the chunk
+                     detector. Values:
+                       * ``None`` (default) — AUTO: flatten only when the raw
+                         top is too jagged, i.e.
+                         ``top_edge_roughness(raw) > config.sam_top_roughness_max``.
+                       * ``True``  — always flatten (force the prior on).
+                       * ``False`` — never flatten (force the raw top).
+                     Auto keeps the true, un-straightened surface geometry on
+                     clean masks and only intervenes on the squiggly ones.
         top_tilt_max_deg: Max tilt of the enforced top line from horizontal.
 
     Returns:
@@ -158,6 +171,36 @@ def detect_sam(
     if filled is None:
         return np.zeros((h, w), dtype=np.uint8), None
 
-    if flatten_top:
+    # Straighten ragged side walls (logo-text scallops / low-confidence jitter on
+    # dark fills) so the ROI follows the cup wall and stops dragging thin dark
+    # slivers into the chunk detector. Colour-agnostic geometry; a clean wall is
+    # left as-is. Done before the top prior, which handles the top edge separately.
+    if config.sam_side_refine_win > 0:
+        filled = refine_cup_sides(filled, win_frac=config.sam_side_refine_win)
+        filled, bbox = _largest_filled(filled)
+        if filled is None:
+            return np.zeros((h, w), dtype=np.uint8), None
+
+    # Fixed-rig bottom prior: extend the ROI down to the holder gasket so a big
+    # bottom chunk on a dark fill (where SAM stops mid-cup) isn't left out and the
+    # cup falsely scored clean. Gated on finding the dark gasket, so cups already at
+    # their true bottom are untouched.
+    if config.sam_bottom_extend_frac > 0:
+        filled = extend_roi_to_gasket(
+            filled, image,
+            max_frac=config.sam_bottom_extend_frac,
+            dark_drop=config.sam_gasket_dark_drop,
+        )
+        filled, bbox = _largest_filled(filled)
+        if filled is None:
+            return np.zeros((h, w), dtype=np.uint8), None
+
+    # Top-edge prior: raw is primary; flatten only when forced (True) or, in
+    # AUTO mode (None), when the raw top is jaggier than the roughness gate.
+    if flatten_top is None:
+        do_flatten = top_edge_roughness(filled) > config.sam_top_roughness_max
+    else:
+        do_flatten = flatten_top
+    if do_flatten:
         filled, bbox = flatten_roi_top(filled, top_tilt_max_deg=top_tilt_max_deg)
     return filled, bbox

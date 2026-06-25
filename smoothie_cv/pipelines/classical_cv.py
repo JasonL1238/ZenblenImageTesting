@@ -209,13 +209,20 @@ class ClassicalCVPipeline(BlendPipeline):
         # is distance-bounded, and only confident seeds grow — so a marginal speck is
         # never amplified into a flag and growth can't crawl across the cup.
         excluded = glare | bright_neutral
+        # a grown pixel must deviate in raw magnitude too (not just project onto the
+        # seed direction): low-contrast haze/condensation weakly aligns with the seed
+        # direction everywhere, so projection alone bleeds across flat smoothie. Gate
+        # on dE >= a fraction of the per-image seed threshold to keep growth on the
+        # chunk's genuine fading margin.
+        grow_min_dE = cfg.dev_grow_min_dE_frac * thr
+        magnitude_ok = dE >= grow_min_dE
         for seed_mask in grow_seed_masks:
             sig = dev[seed_mask].mean(axis=0)        # chunk's mean deviation direction
             norm = float(np.linalg.norm(sig))
             if norm < 1e-3:
                 continue
             proj = (dev * (sig / norm)).sum(axis=2)  # how far each pixel deviates that way
-            field = ((proj >= cfg.dev_grow_proj_thr) & mi).astype(np.uint8) * 255
+            field = ((proj >= cfg.dev_grow_proj_thr) & magnitude_ok & mi).astype(np.uint8) * 255
             field[excluded] = 0
             field[:foam_cut, :] = 0
             seed = seed_mask.astype(np.uint8) * 255

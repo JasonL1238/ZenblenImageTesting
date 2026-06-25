@@ -78,10 +78,19 @@ class Config:
     # deviation direction — this captures the tail (same direction, low magnitude) that a
     # raw-ΔE-magnitude threshold drops, while uniform smoothie (no consistent direction)
     # and off-direction glints are excluded.
-    dev_grow_proj_thr: float = 7.0      # min projection (LAB units) onto the chunk's
-                                        # signature direction for a pixel to join
-    dev_grow_max_iter: int = 25         # bound growth to ~25 px from the seed (reach the
-                                        # tail, but can't crawl across the whole cup)
+    dev_grow_proj_thr: float = 5.0      # min projection (LAB units) onto the chunk's
+                                        # signature direction for a pixel to join. Lowered
+                                        # 7->5 so a chunk's faint same-direction body/tail
+                                        # (e.g. cf4d's amber lump, only ~20% covered before)
+                                        # is reached; bleed is held off by dev_grow_min_dE_frac.
+    dev_grow_min_dE_frac: float = 0.5   # a grown pixel must ALSO deviate in raw magnitude:
+                                        # dE >= this * (per-image seed threshold). Projection
+                                        # alone grows across low-contrast haze/condensation
+                                        # (e.g. dd4d29) where noise weakly aligns with the seed
+                                        # direction; requiring real deviation magnitude keeps
+                                        # growth on the genuine fading margin, not flat smoothie.
+    dev_grow_max_iter: int = 40         # bound growth to ~40 px from the seed (reach the
+                                        # tail of larger lumps, but can't crawl across the cup)
     dev_grow_min_seed_area: int = 200   # only GROW seeds at least this big (a confident
                                         # chunk core worth completing). Tiny marginal seeds
                                         # (logo letter, rim glare, lone fleck) are kept as-is
@@ -129,6 +138,44 @@ class Config:
 
     # --- SAM2 (container detection) ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
+    # Top-edge prior policy. The RAW SAM mask is the primary output; the
+    # straight-line top prior (flatten_roi_top) is applied ONLY when the raw
+    # mask's top edge is too jagged — i.e. a "weird" mask whose ragged rim would
+    # otherwise drag the foam/meniscus band into the ROI and fire the chunk
+    # detector. Flatten iff top_edge_roughness(raw) > sam_top_roughness_max.
+    # 2.5 px: below this the raw top is clean enough to keep as-is; above it the
+    # rim is squiggly enough to need straightening. (A blunt single-metric gate —
+    # roughness can't perfectly separate every misfire, so ~2 faint foam FPs may
+    # leak vs. always-flatten; the trade is that most masks keep their true,
+    # un-straightened surface geometry.)
+    sam_top_roughness_max: float = 2.5
+    # Side-wall refinement: median-smooth the per-row left/right walls over this
+    # fraction of the cup height to straighten ragged sides (logo-text scallops,
+    # low-confidence jitter on dark fills) that otherwise drag thin dark slivers
+    # into the ROI and misfire the chunk detector. Robust median => a clean wall is
+    # unchanged and it never extends past the true wall. 0 disables.
+    sam_side_refine_win: float = 0.06
+    # Fixed-rig bottom prior (DISABLED by default — see why below). On dark fills
+    # SAM stops mid-cup where the smoothie blends into the shadowed holder, leaving
+    # a big bottom chunk outside the ROI (the cup then scores falsely clean, e.g.
+    # 50e294/749a). `extend_roi_to_gasket` extends the ROI down to the dark holder
+    # gasket, gated on finding that gasket so correctly-segmented cups are untouched.
+    # It is geometrically CORRECT (verified: it reaches the gasket and re-includes
+    # the cream mass on 50e294/749a, and is a no-op on cups already at their true
+    # bottom). BUT enabling it does NOT fix the false-clean and REGRESSES the set:
+    #   1. The lower cream mass is LARGER than the local-deviation base-blur kernel
+    #      (dev_blur_kernel=121), so the masked blur adapts *to the cream* → its
+    #      ΔE ≈ 0 and it is invisible to the detector regardless of ROI (confirmed
+    #      even with the bright-neutral exclusion off). Detecting it needs a
+    #      different sensor (global/region model or a smaller adaptive base), not a
+    #      bigger ROI.
+    #   2. Enlarging the ROI with the bright bottom band shifts the per-image
+    #      adaptive threshold (mean+k·σ of ΔE), which flipped 18 cups and ERASED
+    #      genuine detections elsewhere (incl. the cf4d chunk-extent fix).
+    # Kept behind this flag (correct, reusable) for if/when the chunk detector is
+    # made ROI-composition-robust. Set sam_bottom_extend_frac>0 to enable.
+    sam_bottom_extend_frac: float = 0.0
+    sam_gasket_dark_drop: float = 0.55
 
     # --- output ---
     output_dir: Path = field(default_factory=lambda: Path("outputs"))

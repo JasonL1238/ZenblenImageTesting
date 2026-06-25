@@ -165,6 +165,111 @@ def flatten_roi_top(
     return flat, (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
 
 
+def refine_cup_sides(mask: np.ndarray, win_frac: float = 0.06) -> np.ndarray:
+    """Straighten jagged side walls of a filled cup ROI mask.
+
+    A cup's horizontal cross-section at any height is a single convex span, so the
+    per-row left/right boundary should vary smoothly down the cup. But printed logo
+    text and low SAM confidence on dark/maroon fills make SAM's side boundary
+    scallop inward at each letter and bulge out at others; that ragged edge also
+    drags thin dark slivers (cup-wall text, gasket shadow) into the ROI where they
+    misfire the chunk detector (e.g. the spurious ~95px "chunk" on 1fd0).
+
+    For each occupied row this replaces the left and right wall x with the *median*
+    wall position over a vertical window (``win_frac`` of the occupied height), then
+    refills the row between the smoothed walls. The median is robust to inward
+    notches *and* outward bulges, and — unlike a min/max envelope — it can never
+    push the wall past the surrounding *real* wall positions, so it does not invent
+    coverage outside the true cup. A clean wall is left essentially unchanged
+    (median of a smooth signal ≈ itself). Top and bottom rows are preserved; the
+    straight-line top prior (``flatten_roi_top``) still handles the top edge.
+    """
+    boundary = _top_boundary(mask)
+    if boundary is None:
+        return mask
+    rows = np.where((mask > 0).any(axis=1))[0]
+    if rows.size < 3:
+        return mask
+    left = np.array([np.argmax(mask[y] > 0) for y in rows], dtype=np.float64)
+    right = np.array([mask.shape[1] - 1 - np.argmax(mask[y][::-1] > 0) for y in rows],
+                     dtype=np.float64)
+    win = max(3, int(rows.size * win_frac) | 1)
+    pad = win // 2
+    out = np.zeros_like(mask)
+    for idx, y in enumerate(rows):
+        a, b = max(0, idx - pad), min(rows.size, idx + pad + 1)
+        ls = int(np.median(left[a:b]))
+        rs = int(np.median(right[a:b]))
+        if rs >= ls:
+            out[y, ls : rs + 1] = 255
+    return out
+
+
+def extend_roi_to_gasket(
+    mask: np.ndarray,
+    image: np.ndarray,
+    max_frac: float = 0.25,
+    dark_drop: float = 0.55,
+) -> np.ndarray:
+    """Extend a cup ROI mask down to the holder gasket (fixed-rig bottom prior).
+
+    On dark/maroon fills the lower smoothie blends into the shadowed holder, so SAM
+    stops mid-cup and a large bottom chunk (often a pale-cream unblended mass) is
+    left outside the ROI — the cup then scores falsely clean. In this fixed rig the
+    cup always sits in a dark holder gasket, so the *true* cup bottom is the top of
+    that gasket: a dark horizontal band spanning the cup's width directly below the
+    fill.
+
+    This scans downward from the mask's current bottom (within the cup's central
+    column span) for the first row whose median luminance drops below ``dark_drop``
+    of the cup's own bottom-band brightness — the gasket. Each column is then filled
+    down to that gasket row, stopping early at any dark pixel so dark gaps are not
+    filled. The extension is GATED on actually finding the dark gasket within
+    ``max_frac`` of the cup height: a cup SAM already segmented to its true bottom
+    has only bright metal/reflection below (no dark band found) and is left
+    unchanged, so correctly-segmented cups never over-extend onto the holder.
+    """
+    boundary = _top_boundary(mask)
+    if boundary is None:
+        return mask
+    L = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[:, :, 0].astype(np.float32)
+    h, w = mask.shape
+    ys, xs = np.where(mask > 0)
+    y_top, y_bot = int(ys.min()), int(ys.max())
+    x_lo, x_hi = int(xs.min()), int(xs.max())
+    roi_h = max(y_bot - y_top, 1)
+    # cup brightness reference = median L of the cup's bottom 15% band
+    band = mask.copy()
+    band[: y_bot - int(0.15 * roi_h), :] = 0
+    if not (band > 0).any():
+        return mask
+    ref_L = float(np.median(L[band > 0]))
+    dark_thr = dark_drop * ref_L
+    # central column span (avoid ragged side edges biasing the row median)
+    cx_lo = x_lo + int(0.10 * (x_hi - x_lo))
+    cx_hi = x_hi - int(0.10 * (x_hi - x_lo))
+    if cx_hi <= cx_lo:
+        return mask
+    max_extend = int(max_frac * roi_h)
+    # find the gasket row: first row below the fill whose central median L goes dark
+    gasket_row = None
+    for y in range(y_bot + 1, min(y_bot + max_extend + 1, h)):
+        if float(np.median(L[y, cx_lo : cx_hi + 1])) < dark_thr:
+            gasket_row = y
+            break
+    if gasket_row is None:        # no gasket below => already at true bottom; leave as-is
+        return mask
+    out = mask.copy()
+    cols = np.where(mask.any(axis=0))[0]
+    for x in cols:
+        yb = int(np.where(mask[:, x] > 0)[0].max())
+        for y in range(yb + 1, gasket_row):
+            if L[y, x] < dark_thr:
+                break             # hit the gasket / a dark gap in this column
+            out[y, x] = 255
+    return out
+
+
 def _largest_filled(mask: np.ndarray) -> tuple[np.ndarray | None, BBox | None]:
     """Keep only the largest contour in ``mask``, fill it, and return (filled, bbox)."""
     h, w = mask.shape[:2]
