@@ -7,7 +7,6 @@ Run:  pytest smoothie_cv/tests/test_pipeline.py -v
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from smoothie_cv.config import Config
 from smoothie_cv.pipelines.base import BlendResult
@@ -112,42 +111,3 @@ class TestClassicalCVPipeline:
     def test_mask_zero_outside_roi(self):
         result = self.pipeline.analyze(_patchy_image(), _roi())
         assert (result.mask[_roi() == 0] == 0).all()
-
-
-# ---------------------------------------------------------------------------
-# VLM pipeline — import + init only (API call skipped unless key is set)
-# ---------------------------------------------------------------------------
-
-class TestVLMPipelineInit:
-    def test_import_and_name(self):
-        from smoothie_cv.pipelines.vlm import VLMPipeline
-        assert VLMPipeline(Config()).name == "vlm"
-
-    def test_missing_api_key_raises_environment_error(self, monkeypatch):
-        anthropic = pytest.importorskip("anthropic")  # skip if not installed
-        from smoothie_cv.pipelines.vlm import VLMPipeline
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        with pytest.raises(EnvironmentError):
-            VLMPipeline(Config())._client_instance()
-
-
-# ---------------------------------------------------------------------------
-# SAM pipeline — import + init only (model load skipped if not installed)
-# ---------------------------------------------------------------------------
-
-class TestSAMPipelineInit:
-    def test_import_and_name(self):
-        from smoothie_cv.pipelines.sam import SAMPipeline
-        assert SAMPipeline(Config()).name == "sam"
-
-    def test_build_generator_raises_import_error_without_sam2(self, monkeypatch):
-        import sys
-        from smoothie_cv.pipelines.sam import SAMPipeline
-        # simulate sam2 not installed
-        monkeypatch.setitem(sys.modules, "sam2", None)
-        monkeypatch.setitem(sys.modules, "sam2.build_sam", None)
-        monkeypatch.setitem(sys.modules, "sam2.automatic_mask_generator", None)
-        pipeline = SAMPipeline(Config())
-        pipeline._mask_generator = None  # reset lazy cache
-        with pytest.raises((ImportError, Exception)):
-            pipeline._build_generator()

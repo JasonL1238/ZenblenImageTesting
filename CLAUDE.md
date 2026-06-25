@@ -4,10 +4,10 @@
 - Test (single):    `pytest smoothie_cv/tests/test_pipeline.py::TestClassicalCVPipeline -v`
 - Test (full):      `pytest smoothie_cv/tests/test_pipeline.py -v`
 - Run classical:    `python run.py --pipeline classical --image <img.jpg>`
-- Run VLM:          `ANTHROPIC_API_KEY=sk-... python run.py --pipeline vlm --image <img.jpg>`
-- Run SAM:          `python run.py --pipeline sam --image <img.jpg>`
-- Run all pipelines:`python run.py --pipeline all --image data/images/`
-- Batch compare:    `python run.py --pipeline all --image data/images/ --threshold 0.90`
+- Batch:            `python run.py --pipeline classical --image data/images/ --threshold 0.90`
+
+Classical is the only analysis pipeline; the VLM and SAM *analysis* pipelines
+were removed. SAM2 remains the priority CONTAINER detector (see below).
 
 # Container detection (ROI)
 - SAM2 is the PRIORITY detector; classical colour-thresholding is the FALLBACK.
@@ -85,12 +85,11 @@
 - Use a subagent for image analysis and multi-file investigation to keep context lean.
 
 # Gotchas / environment
-- VLM pipeline requires `ANTHROPIC_API_KEY` env var; missing key raises `EnvironmentError`.
-- SAM pipeline requires checkpoint files in `checkpoints/` — download separately:
+- SAM2 container detection requires checkpoint files in `checkpoints/` — download separately:
   `wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -P checkpoints/`
 - SAM2 is installed from source, not PyPI: see `requirements.txt` comments.
 - M4 Pro uses MPS backend (`torch.backends.mps`); Jetson Nano falls back to CPU — no CUDA.
-- All pipelines share the same `BlendResult` contract — swap via `--pipeline` flag only.
+- Pipelines implement the `BlendResult` contract (`smoothie_cv/pipelines/base.py`).
 
 # Session health (canary)
 - Begin EVERY response with the marker 🟢 followed by a space.

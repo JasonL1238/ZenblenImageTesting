@@ -7,7 +7,6 @@ Priority (highest → lowest):
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -128,13 +127,8 @@ class Config:
     # only when SAM is unavailable or returns no plausible mask.
     detector_priority: list[str] = field(default_factory=lambda: ["sam", "classical"])
 
-    # --- SAM2 ---
+    # --- SAM2 (container detection) ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
-    sam_points_per_side: int = 32
-
-    # --- VLM ---
-    vlm_model: str = "claude-sonnet-4-6"
-    vlm_api_key_env: str = "ANTHROPIC_API_KEY"
 
     # --- output ---
     output_dir: Path = field(default_factory=lambda: Path("outputs"))
@@ -156,6 +150,3 @@ class Config:
         if yaml_path is not None:
             return cls.from_yaml(yaml_path)
         return cls()
-
-    def vlm_api_key(self) -> str | None:
-        return os.environ.get(self.vlm_api_key_env)

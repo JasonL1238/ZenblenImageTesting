@@ -5,9 +5,6 @@ Smoothie blendedness pipeline runner.
 Usage (single image):
     python run.py --pipeline classical --image data/images/test.jpg
 
-Usage (all pipelines, single image):
-    python run.py --pipeline all --image data/images/test.jpg
-
 Usage (batch — directory of images):
     python run.py --pipeline classical --image data/images/
 
@@ -15,9 +12,7 @@ Outputs per run:
     outputs/<stem>_<pipeline>_mask.png      - unblended region overlay
     outputs/<stem>_<pipeline>_roi.png       - detected container boundary
     outputs/<stem>_<pipeline>_result.json   - score, passed, metadata
-
-Batch comparison (--pipeline all on a directory):
-    outputs/comparison.csv
+    outputs/comparison.csv                  - per-image scores (batch)
 """
 
 from __future__ import annotations
@@ -46,19 +41,13 @@ from smoothie_cv.detection import (
 from smoothie_cv.scoring.metrics import overlay_mask
 
 
-PIPELINE_NAMES = ["classical", "vlm", "sam"]
+PIPELINE_NAMES = ["classical"]
 
 
 def load_pipeline(name: str, config: Config):
     if name == "classical":
         from smoothie_cv.pipelines.classical_cv import ClassicalCVPipeline
         return ClassicalCVPipeline(config)
-    if name == "vlm":
-        from smoothie_cv.pipelines.vlm import VLMPipeline
-        return VLMPipeline(config)
-    if name == "sam":
-        from smoothie_cv.pipelines.sam import SAMPipeline
-        return SAMPipeline(config)
     raise ValueError(f"Unknown pipeline: {name!r}. Choose from {PIPELINE_NAMES}")
 
 
@@ -263,8 +252,8 @@ def write_run_manifest(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Smoothie blendedness pipeline runner")
-    parser.add_argument("--pipeline", required=True,
-                        help=f"Pipeline name or 'all'. Choices: {PIPELINE_NAMES}")
+    parser.add_argument("--pipeline", default="classical", choices=PIPELINE_NAMES,
+                        help="Analysis pipeline (default: classical).")
     parser.add_argument("--image", required=True,
                         help="Path to an image file or directory of images")
     parser.add_argument("--threshold", type=float, default=None,
@@ -285,7 +274,7 @@ def main() -> None:
     output_root = Path(args.output_dir) if args.output_dir is not None else config.output_dir
 
     image_path = Path(args.image)
-    pipeline_names = PIPELINE_NAMES if args.pipeline == "all" else [args.pipeline]
+    pipeline_names = [args.pipeline]
 
     if not (image_path.is_dir() or image_path.is_file()):
         print(f"Error: {image_path} is not a file or directory.")

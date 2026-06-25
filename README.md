@@ -9,19 +9,15 @@ Computer-vision pipeline for scoring smoothie **blendedness** — how uniformly 
 python run.py --pipeline classical --image data/images/test.jpg
 
 # Batch (directory)
-python run.py --pipeline classical --image data/images/
-
-# Compare all pipelines
-python run.py --pipeline all --image data/images/ --threshold 0.90
+python run.py --pipeline classical --image data/images/ --threshold 0.90
 ```
 
-## Pipelines
+## Pipeline
 
-| Pipeline | Notes |
-|---|---|
-| `classical` | OpenCV variance + Canny edges (default, no extra deps) |
-| `vlm` | Claude vision API — requires `ANTHROPIC_API_KEY` |
-| `sam` | SAM2 segmentation — requires checkpoint in `checkpoints/` |
+The **classical** CV pipeline scores blendedness by finding unblended chunks
+inside the container. Container detection (ROI) uses SAM2 as the priority
+detector with a classical colour-threshold fallback — see `CLAUDE.md` for the
+detection and chunk-detection design.
 
 ## Outputs
 
