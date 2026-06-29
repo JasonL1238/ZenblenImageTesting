@@ -44,6 +44,16 @@ class ClassicalCVPipeline(BlendPipeline):
         # clip to ROI and map back to full-frame coords
         unblended = cv2.bitwise_and(unblended, roi.mask)
         unblended = paste_mask(unblended, roi)
+
+        # Path 5: gated below-ROI cream band (full-frame). When it fires, extend the
+        # ROI over the band so the cream counts in both the chunk mask and the score
+        # denominator. Gated on the cream signature → only genuine-cream cups change.
+        if self.config.dev_botband_enable:
+            band = self._bottom_cream_band(image, roi_mask)
+            if band is not None and band.any():
+                roi_mask = cv2.bitwise_or(roi_mask, band)
+                unblended = cv2.bitwise_or(unblended, band)
+
         score = compute_blend_score(unblended, roi_mask)
         passed = score >= self.config.threshold
 
@@ -57,6 +67,83 @@ class ClassicalCVPipeline(BlendPipeline):
                 "dev_k_sigma": self.config.dev_k_sigma,
             },
         )
+
+    # ── Path 5: below-ROI cream-on-gasket band ──────────────────────────────────
+    def _bottom_cream_band(self, image: np.ndarray, roi_mask: np.ndarray) -> np.ndarray | None:
+        """Detect a thin unblended cream layer sitting on the gasket just BELOW the
+        ROI (where SAM cut above it). Returns a full-frame mask of the band, or None.
+
+        Scans the central columns from y_bot downward for a contiguous run of bright,
+        slightly-warm low-chroma rows (cream) bounded below by the dark gasket. The
+        chroma window is the discriminator: gray hardware (ch≈0), glare (ch≈4–5) and
+        dark shadow (ch≈1–5, dark L) are excluded; only warm off-white cream passes.
+        """
+        cfg = self.config
+        ys, xs = np.where(roi_mask > 0)
+        if ys.size < 100:
+            return None
+        y_top, y_bot = int(ys.min()), int(ys.max())
+        x_lo, x_hi = int(xs.min()), int(xs.max())
+        roi_h = max(y_bot - y_top, 1)
+        H = image.shape[0]
+
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        L = lab[:, :, 0]
+        chroma = np.sqrt((lab[:, :, 1] - 128.0) ** 2 + (lab[:, :, 2] - 128.0) ** 2)
+
+        # body reference band (mid-cup) — same gates as Path 4
+        rt = int(y_top + 0.35 * roi_h)
+        rb = int(y_top + 0.55 * roi_h)
+        ref_sel = (roi_mask > 0)[rt:rb + 1, :]
+        if ref_sel.sum() < 20:
+            return None
+        body_L = float(np.median(L[rt:rb + 1, :][ref_sel]))
+        body_ch = float(np.median(chroma[rt:rb + 1, :][ref_sel]))
+        if body_L < cfg.dev_bot_min_body_L or body_ch < cfg.dev_bot_min_body_chroma:
+            return None
+
+        cl = x_lo + int(cfg.dev_botband_inset * (x_hi - x_lo))
+        chi = x_hi - int(cfg.dev_botband_inset * (x_hi - x_lo))
+        if chi <= cl:
+            return None
+        dark_thr = cfg.dev_botband_dark_drop * body_L
+        max_ext = int(cfg.dev_botband_max_ext_frac * roi_h)
+
+        band_rows: list[int] = []
+        gasket = False
+        band_done = False
+        for y in range(y_bot + 1, min(H, y_bot + max_ext + 1)):
+            rl = float(np.median(L[y, cl:chi + 1]))
+            rc = float(np.median(chroma[y, cl:chi + 1]))
+            if rl < dark_thr:               # hit the dark gasket → band is bounded below
+                gasket = True
+                break
+            is_cream = rc <= cfg.dev_botband_chroma_hi and rl >= cfg.dev_botband_L_lo
+            if is_cream and not band_done:
+                band_rows.append(y)
+            elif band_rows:                 # band ended; keep scanning for the gasket
+                band_done = True
+
+        if not (gasket and len(band_rows) >= cfg.dev_botband_min_h):
+            return None
+        band_L = float(np.median([np.median(L[y, cl:chi + 1]) for y in band_rows]))
+        band_ch = float(np.median([np.median(chroma[y, cl:chi + 1]) for y in band_rows]))
+        if not (cfg.dev_botband_chroma_lo <= band_ch <= cfg.dev_botband_chroma_hi):
+            return None
+        if not (cfg.dev_botband_L_lo <= band_L <= cfg.dev_botband_L_hi):
+            return None
+
+        # build the band mask: cream-like pixels (bright + low-chroma) across the cup
+        # width, over the band rows. Restricting to the cream signature avoids grabbing
+        # the surrounding holder/gasket pixels at those rows.
+        out = np.zeros(roi_mask.shape, np.uint8)
+        y0, y1 = band_rows[0], band_rows[-1]
+        sub_L = L[y0:y1 + 1, x_lo:x_hi + 1]
+        sub_ch = chroma[y0:y1 + 1, x_lo:x_hi + 1]
+        cream = (sub_ch <= cfg.dev_botband_chroma_hi) & (sub_L >= cfg.dev_botband_L_lo) \
+            & (sub_L <= cfg.dev_botband_L_hi)
+        out[y0:y1 + 1, x_lo:x_hi + 1][cream] = 255
+        return out
 
     # ── primary: colour-agnostic local-deviation detector ──────────────────────
     def _deviation_mask(self, image: np.ndarray, roi_mask: np.ndarray) -> np.ndarray:
@@ -100,6 +187,14 @@ class ClassicalCVPipeline(BlendPipeline):
         thr = max(thr, cfg.dev_min_delta_e)  # floor: ignore trivially small deviations
         raw = ((dE >= thr) & mi).astype(np.uint8) * 255
 
+        # ROI bounds — needed here for the bright-neutral bottom exemption and foam cut.
+        ys, xs = np.where(roi_mask > 0)
+        y_top, y_bot = int(ys.min()), int(ys.max())
+        x_left, x_right = int(xs.min()), int(xs.max())
+        roi_h = max(y_bot - y_top, 1)
+        roi_w = max(x_right - x_left, 1)
+        foam_cut = int(y_top + cfg.dev_foam_frac * roi_h)
+
         # drop specular glare: very bright + low chroma (LAB a,b centred at 128)
         L, A, B = lab[:, :, 0], lab[:, :, 1], lab[:, :, 2]
         chroma = np.sqrt((A - 128.0) ** 2 + (B - 128.0) ** 2)
@@ -114,20 +209,20 @@ class ClassicalCVPipeline(BlendPipeline):
         # the dominant "zenblen" logo false positive on dark smoothies.
         dL = L - base[:, :, 0]
         bright_neutral = (dL > cfg.dev_bright_dL) & (chroma < cfg.dev_bright_chroma)
+        # Exempt the bottom zone from bright-neutral suppression: cream/pale unblended
+        # masses at the cup bottom are bright+neutral vs their local base (K=121 mixes
+        # them with the dark smoothie above → they look "logo-like").  The logo never
+        # appears in the last dev_bright_bot_exempt_frac of the cup, so this exemption
+        # recovers bottom chunks without touching the logo zone.
+        if cfg.dev_bright_bot_exempt_frac > 0:
+            exempt_y = int(y_top + (1.0 - cfg.dev_bright_bot_exempt_frac) * roi_h)
+            bright_neutral[exempt_y:, :] = False
         raw[bright_neutral] = 0
 
         # despeckle (small open only). No close — keep logo letters as separate
         # components so the text-line detector can recognise their arrangement.
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         clean = cv2.morphologyEx(raw, cv2.MORPH_OPEN, k)
-
-        # exclude the top foam/rim band of the cup (bubbles read as deviation)
-        ys, xs = np.where(roi_mask > 0)
-        y_top, y_bot = ys.min(), ys.max()
-        x_left, x_right = xs.min(), xs.max()
-        roi_h = max(y_bot - y_top, 1)
-        roi_w = max(x_right - x_left, 1)
-        foam_cut = int(y_top + cfg.dev_foam_frac * roi_h)
         clean[:foam_cut, :] = 0
 
         # connected components → classify the "zenblen" logo (a horizontal row of
@@ -227,6 +322,100 @@ class ClassicalCVPipeline(BlendPipeline):
             field[:foam_cut, :] = 0
             seed = seed_mask.astype(np.uint8) * 255
             out = cv2.bitwise_or(out, self._reconstruct(seed, field, cfg.dev_grow_max_iter))
+
+        # ── Path 4: bottom absolute-chroma gate ──────────────────────────────
+        # Cups with unblended cream/white masses at the cup bottom have nearly
+        # ZERO chroma in the last few ROI rows (ch≈5–10).  K=121 adapts to large
+        # masses (ΔE≈0), making them invisible to paths 1–3.
+        #
+        # Detection: if the MEDIAN absolute chroma of the last dev_bot_n_rows rows
+        # is ≤ dev_bot_abs_chroma_max, flag those rows as a cream-chunk region.
+        #
+        # Precision gates:
+        #   • body_L ≥ 95: dark cups (maroon/dark-red) naturally lose chroma at
+        #     the hardware gasket — excluding them avoids that FP.
+        #   • body_chroma ≥ 22: skips pale/yellow cups whose body chroma is already
+        #     low, where the absolute floor has no discriminative power.
+        #   • bot_med_ch ≤ 11 (not a relative drop): a cream mass drops to ch≈5–10
+        #     uniformly; the gasket transition on any cup also produces a 1–2 row
+        #     dip to ch≈5 but the OTHER rows stay ≥12, so the 6-row MEDIAN stays
+        #     above 11. Using absolute chroma sidesteps the misleading "large drop"
+        #     that a single gasket row can create when the rest of the bottom is
+        #     still chromatic.
+        if cfg.dev_bot_n_rows > 0:
+            bot_t = max(y_top, y_bot - cfg.dev_bot_n_rows + 1)
+            bot_sel = (roi_mask > 0)[bot_t:y_bot + 1, :]
+            bot_px = lab[bot_t:y_bot + 1, :][bot_sel]
+            if bot_px.shape[0] >= 20:
+                bot_ch_vals = np.sqrt((bot_px[:, 1] - 128.0) ** 2
+                                      + (bot_px[:, 2] - 128.0) ** 2)
+                bot_med_ch = float(np.median(bot_ch_vals))
+                ref_t2 = int(y_top + 0.35 * roi_h)
+                ref_b2 = int(y_top + 0.55 * roi_h)
+                ref_px2 = lab[ref_t2:ref_b2 + 1, :][
+                    (roi_mask > 0)[ref_t2:ref_b2 + 1, :]]
+                if ref_px2.shape[0] >= 20:
+                    ref_med_L = float(np.median(ref_px2[:, 0]))
+                    ref_med_ch = float(np.median(
+                        np.sqrt((ref_px2[:, 1] - 128.0) ** 2
+                                + (ref_px2[:, 2] - 128.0) ** 2)))
+                    if (ref_med_L >= cfg.dev_bot_min_body_L
+                            and ref_med_ch >= cfg.dev_bot_min_body_chroma
+                            and bot_med_ch <= cfg.dev_bot_abs_chroma_max):
+                        bot_mask = (roi_mask > 0).copy()
+                        bot_mask[:bot_t, :] = False
+                        out[bot_mask] = 255
+
+        # ── reference-band deviation pass ─────────────────────────────────────
+        # The K=121 Gaussian adapts to any region larger than ~60px radius, making
+        # large monochromatic masses (e.g. a pale cream layer at the bottom of a dark
+        # smoothie) invisible to the local ΔE map (local ΔE ≈ 0).
+        #
+        # Fix: compare pixels in the LOWER ZONE (below target_top_frac of the ROI)
+        # against the mean colour of a REFERENCE BAND just above the lower zone
+        # (ref_top_frac .. ref_bot_frac). A cream mass creates a sharp colour jump;
+        # natural gradient changes gradually so reference ≈ lower-zone colour.
+        # The area gate (dev_global_min_area) eliminates logo letters and glare.
+        if cfg.dev_global_enable:
+            ref_top_y = int(y_top + cfg.dev_global_ref_top_frac * roi_h)
+            ref_bot_y = int(y_top + cfg.dev_global_ref_bot_frac * roi_h)
+            target_top_y = int(y_top + cfg.dev_global_target_top_frac * roi_h)
+
+            ref_sel = mi.copy()
+            ref_sel[:ref_top_y, :] = False
+            ref_sel[ref_bot_y:, :] = False
+            ref_pixels = lab[ref_sel]
+            if ref_pixels.shape[0] >= 50:
+                ref_mean = ref_pixels.mean(axis=0)
+                dE_ref = np.sqrt(((lab - ref_mean) ** 2).sum(axis=2))
+
+                # chroma gate: unblended cream/neutral masses are less saturated than
+                # the coloured smoothie body.  Lighter-pink lower zones (natural
+                # gradient) keep the same hue, so their chroma stays close to the
+                # reference.  Require pixels to be ≥ dev_global_chroma_drop units
+                # LESS chromatic than the reference band mean.
+                A_ch = lab[:, :, 1]
+                B_ch = lab[:, :, 2]
+                chroma_px = np.sqrt((A_ch - 128.0) ** 2 + (B_ch - 128.0) ** 2)
+                ref_chroma = float(np.sqrt((ref_mean[1] - 128.0) ** 2
+                                          + (ref_mean[2] - 128.0) ** 2))
+                neutral_vs_ref = (ref_chroma - chroma_px) >= cfg.dev_global_chroma_drop
+
+                target_sel = mi.copy()
+                target_sel[:target_top_y, :] = False
+                global_raw = (target_sel & (dE_ref >= cfg.dev_global_thr)
+                              & neutral_vs_ref).astype(np.uint8) * 255
+                global_raw[:foam_cut, :] = 0
+
+                k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+                global_clean = cv2.morphologyEx(global_raw, cv2.MORPH_CLOSE, k5)
+                global_clean = cv2.morphologyEx(global_clean, cv2.MORPH_OPEN, k5)
+                n_g, labels_g, stats_g, _ = cv2.connectedComponentsWithStats(
+                    global_clean, connectivity=8)
+                for li in range(1, n_g):
+                    if int(stats_g[li, cv2.CC_STAT_AREA]) >= cfg.dev_global_min_area:
+                        out[labels_g == li] = 255
+
         return out
 
     @staticmethod

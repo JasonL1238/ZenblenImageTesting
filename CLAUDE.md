@@ -62,6 +62,40 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   seed's mean deviation direction (`_reconstruct`, distance-bounded by `dev_grow_max_iter`,
   reusing the glare/bright/foam exclusions). Completes the chunk (e.g. 4c68's lighter
   tail) without bleeding into smoothie/logo. Verdict-stable: still 27 flagged.
+- PATH 4 (bottom absolute-chroma gate) — catches cream/pale masses at the cup BOTTOM
+  that K=121 misses (large mass → local base adapts, ΔE≈0). Logic: if the MEDIAN
+  absolute chroma of the last `dev_bot_n_rows` rows is ≤ `dev_bot_abs_chroma_max`=11,
+  the bottom zone is flagged. Precision gates:
+    - `dev_bot_min_body_L` ≥ 95: dark cups (maroon body L≈69) lose chroma at the
+      hardware gasket and would false-positive — excluding them is mandatory.
+    - `dev_bot_min_body_chroma` ≥ 22: skips pale/yellow bodies with no discriminative floor.
+    - ABSOLUTE ceiling (≤11), NOT relative drop: the gasket transition on ANY cup
+      dips 1–2 rows to ch≈5 but surrounding rows stay ≥12 → 6-row median stays above
+      11 for clean cups. A cream mass fills ALL 6 rows uniformly → median ≈8–10.
+      Drop-based logic fires on 38/92 images (natural gradient); absolute ceiling fires
+      on 1 (50e294 with cream mass fully inside the ROI).
+  Net on the 92-image set: 30→31 flagged (+1: 50e294 correctly recovered).
+- PATH 5 (below-ROI cream-on-gasket band) — recovers thin cream layers that SAM cut
+  ABOVE, so the cream sits just BELOW y_bot and Path 4 never sees it (e.g. 749a).
+  Global gasket-extend was rejected first: enabling `sam_bottom_extend_frac` perturbs the
+  per-ROI adaptive threshold and flips 20 unrelated borderline cups (10 gain / 10 lose,
+  net 0) while recovering NONE of the targets — measured, see `[[bottom-cream-...]]`.
+  Instead, scan the CENTRAL columns (`dev_botband_inset`) just below y_bot for a bright,
+  slightly-warm low-chroma band bounded below by the dark gasket — the cream signature.
+  When it fires, extend the ROI over that band and flag it; because the scan is gated on
+  the signature, only genuine-cream cups change → ZERO churn (unlike global extend).
+  Each look-alike is excluded by a DIFFERENT gate (robust across wide threshold ranges):
+    - gray plastic holder clamp (db150e, ch≈0) → chroma floor `dev_botband_chroma_lo`=7
+    - specular glare (L≈156)                   → L ceiling `dev_botband_L_hi`=145
+    - dark gasket-edge shadow (L≈66–82)        → L floor   `dev_botband_L_lo`=100
+    - chromatic smoothie                       → chroma ceiling `dev_botband_chroma_hi`=12
+  Net on the 92-image set: 31→32 flagged (+1: 749a recovered). Verified surgically:
+  Path-5-on vs off flips exactly 1 verdict (749a clean→chunks), 0 FPs, 0 churn.
+  REMAINING LIMIT (db150e): the cup bottom is OCCLUDED by the gray holder clamp — there
+  is no cream to recover and flagging the clamp would be a hardware FP. This is occlusion,
+  NOT "cream below ROI" (the earlier diagnosis was wrong). Correctly stays clean.
+  NOTE: when Path 5 fires, `BlendResult.mask` contains pixels BELOW the input ROI (the
+  extended cream band); the "mask ⊆ input ROI" invariant becomes "mask ⊆ ROI ∪ cream band".
 - KNOWN LIMIT: scattered tiny low-contrast flecks (dE≈8–12, <90px) on red/pink cups are
   NOT detected. They sit at the SAME local-contrast level as benign texture on truly
   well-blended cups (verified: a local black-tophat fires ~equally on clean 2e7754a and

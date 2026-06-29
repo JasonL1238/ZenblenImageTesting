@@ -96,11 +96,98 @@ class Config:
                                         # (logo letter, rim glare, lone fleck) are kept as-is
                                         # but NOT amplified — growth must not flip a near-clean
                                         # smoothie to flagged on a borderline speck.
+    # global (reference-band) deviation — catches large monochromatic regions
+    # (e.g. a pale cream mass at the bottom of a dark smoothie) that are invisible
+    # to the K=121 local blur because the Gaussian spans the whole region and
+    # adapts its base *to* the mass (ΔE≈0).
+    #
+    # Approach: compare pixels in the lower zone (below dev_global_target_top_frac)
+    # against the mean colour of a REFERENCE BAND just above the lower zone
+    # (dev_global_ref_top_frac .. dev_global_ref_bot_frac). A cream mass creates a
+    # sharp colour jump from the reference to the lower zone; natural smoothie
+    # gradient changes gradually so the reference band closely matches the lower
+    # zone.  A large area gate (dev_global_min_area) excludes logo letters and
+    # glare specks.
+    #
+    # Design decisions:
+    #   - Reference band is placed at 45–62% ROI height — well within the dark
+    #     smoothie body, safely above any bottom chunk (which is in the last ~25%).
+    #   - Target zone starts at 62% — even if a chunk occupies the bottom 30% the
+    #     reference band above it is still pure smoothie.
+    #   - No locally_invisible gate: the lower-zone restriction + area gate are the
+    #     primary precision controls; requiring low local-ΔE would silently drop
+    #     the chunk boundary pixels (where K=121 straddles cream and dark smoothie).
+    #   - Foam band is always excluded (foam_cut already applied to out).
+    dev_global_enable: bool = False  # disabled: bright-neutral exemption handles bottom chunks
+    dev_global_thr: float = 22.0            # ΔE from reference band to flag a pixel
+    dev_global_chroma_drop: float = 12.0    # detected pixels must be ≥ this many chroma
+                                            # units LESS saturated than the reference band
+                                            # mean.  Keeps light-pink lower zones (natural
+                                            # smoothie gradient, still reddish) from firing;
+                                            # cream/neutral masses have chroma drop ≥ 20.
+    dev_global_min_area: int = 1500         # min connected-component area (px)
+    dev_global_ref_top_frac: float = 0.45   # reference band top (fraction of ROI height)
+    dev_global_ref_bot_frac: float = 0.62   # reference band bottom
+    dev_global_target_top_frac: float = 0.62  # lower zone starts here
+
     dev_glare_L: float = 240.0     # LAB L* above this + low chroma = specular glare
     dev_glare_chroma: float = 12.0
     # printed-logo / backlit-text exclusion: bright-vs-base + low chroma (cream text)
     dev_bright_dL: float = 25.0    # ΔL above local base to be considered "bright text"
     dev_bright_chroma: float = 22.0
+    # Cream/pale unblended masses at the CUP BOTTOM share the same bright+neutral
+    # signature as the logo (high dL vs local base, low chroma) because the K=121
+    # kernel mixes the cream with the dark smoothie above, making the base dark and
+    # the cream pixels look "bright and neutral" to the exclusion filter.
+    # The logo never appears in the last dev_bright_bot_exempt_frac of the cup height,
+    # so exempting the bottom zone lets cream masses through while keeping the logo
+    # suppression in place for the rest of the cup.
+    dev_bright_bot_exempt_frac: float = 0.20  # bottom fraction of ROI exempt from
+                                              # bright-neutral suppression (0 = no exemption)
+    # Bottom neutrality check: cups with unblended cream masses at the bottom show a
+    # sharp chroma drop in the last few rows.  K=121 adapts to large cream masses (ΔE≈0)
+    # so the normal deviation paths miss them.  Instead, compare the median absolute
+    # chroma of the very last rows to the mid-body reference band — a large drop flags
+    # the bottom as "cream chunk present."  Only fires on chromatic (coloured) smoothies
+    # (body chroma ≥ dev_bot_min_body_chroma) to skip pale/yellow cups.
+    dev_bot_n_rows: int = 6                   # number of bottom rows to sample
+    dev_bot_min_body_L: float = 95.0          # skip check on DARK cups (maroon/dark-red bodies
+                                              # naturally lose chroma at the gasket transition,
+                                              # mimicking a cream mass; this gates to LIGHT cups
+                                              # only where very low bottom chroma is truly anomalous)
+    dev_bot_min_body_chroma: float = 22.0     # skip check if body is too pale/neutral
+    dev_bot_abs_chroma_max: float = 11.0      # flag if ABSOLUTE median chroma of the bottom rows
+                                              # is below this — real cream/white masses drop to
+                                              # ch≈5–10; a natural gasket gradient is still ≥12.
+                                              # Using absolute chroma (not relative drop) avoids
+                                              # flagging cups where the gasket produces a transient
+                                              # 1–2 row dip that pulls the drop metric high even
+                                              # though most rows are still chromatic.
+    # ── Path 5: below-ROI cream-on-gasket band ───────────────────────────────
+    # SAM often cuts the ROI cleanly ABOVE a thin unblended cream layer that sits
+    # on the holder gasket (e.g. 749a). Path 4 never sees it (cream is below y_bot)
+    # and global gasket-extend is too destabilising (perturbs the adaptive
+    # threshold → 20 verdict flips on unrelated borderline cups, 0 target recovery).
+    # Instead, scan the CENTRAL columns just below y_bot for a bright, slightly-warm
+    # low-chroma band bounded below by the dark gasket — the cream signature. When
+    # it fires, extend the ROI down over that band and flag it. Because the scan is
+    # gated on the cream signature, only genuine-cream cups are touched; every other
+    # ROI is byte-identical → zero churn (unlike global extend).
+    #
+    # The chroma WINDOW is the key discriminator: real cream is a warm off-white
+    # (ch≈8–11), while the look-alikes below the ROI are near-neutral and excluded —
+    # gray plastic holder clamp (db150e, ch≈0), specular glare (ch≈4–5), and dark
+    # gasket-edge shadow (ch≈1–5, also dark L). The L window excludes those dark
+    # shadows (L<100) and blown glare (L>145).
+    dev_botband_enable: bool = True
+    dev_botband_inset: float = 0.25        # horizontal inset per side (use central 1-2·inset)
+    dev_botband_max_ext_frac: float = 0.08  # how far below y_bot to scan (fraction of ROI height)
+    dev_botband_dark_drop: float = 0.55     # gasket row = central L < this · body_L
+    dev_botband_min_h: int = 3              # min band thickness (rows) to fire
+    dev_botband_chroma_lo: float = 7.0      # band median chroma floor (excludes gray/glare/shadow)
+    dev_botband_chroma_hi: float = 12.0     # band median chroma ceiling (excludes chromatic smoothie)
+    dev_botband_L_lo: float = 100.0         # band median L floor (excludes dark gasket shadow)
+    dev_botband_L_hi: float = 145.0         # band median L ceiling (excludes blown specular glare)
     # logo text-line detector: a row of similar-height marks spanning a wide extent
     dev_letter_min_area: int = 60      # min component area to be a letter candidate
     dev_letter_h_lo: float = 0.025     # letter height range as fraction of ROI height
