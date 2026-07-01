@@ -30,12 +30,18 @@ from smoothie_cv.config import Config
 from smoothie_cv.detection import detect_container
 
 
-def mask_to_polygon(mask: np.ndarray, epsilon_frac: float = 0.01) -> list[list[int]]:
+MAX_POLY_POINTS = 8  # hard cap on candidate polygon vertices (fewer = less to edit)
+
+
+def mask_to_polygon(
+    mask: np.ndarray, epsilon_frac: float = 0.01, max_points: int = MAX_POLY_POINTS
+) -> list[list[int]]:
     """Largest external contour of a binary mask -> simplified [[x, y], ...].
 
-    Returns [] if the mask is empty. ``epsilon_frac`` is the approxPolyDP
-    tolerance as a fraction of the contour perimeter (~1% keeps corners/curves
-    with a manageable vertex count).
+    Returns [] if the mask is empty. ``epsilon_frac`` is the initial approxPolyDP
+    tolerance as a fraction of the contour perimeter. The tolerance is then grown
+    until the polygon has at most ``max_points`` vertices, so the labeling UI never
+    starts you with more than a handful of handles to drag.
     """
     contours, _ = cv2.findContours(
         (mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
@@ -43,10 +49,15 @@ def mask_to_polygon(mask: np.ndarray, epsilon_frac: float = 0.01) -> list[list[i
     if not contours:
         return []
     cnt = max(contours, key=cv2.contourArea)
-    if cv2.contourArea(cnt) <= 0:
+    peri = cv2.arcLength(cnt, True)
+    if cv2.contourArea(cnt) <= 0 or peri <= 0:
         return []
-    eps = epsilon_frac * cv2.arcLength(cnt, True)
+    eps = epsilon_frac * peri
     approx = cv2.approxPolyDP(cnt, eps, True)
+    # Grow the tolerance until we're at or under the cap (never below a triangle).
+    while len(approx) > max_points and eps < peri:
+        eps *= 1.3
+        approx = cv2.approxPolyDP(cnt, eps, True)
     return [[int(x), int(y)] for [[x, y]] in approx]
 
 

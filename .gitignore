@@ -26,3 +26,10 @@ debug_outputs/
 
 # Python virtualenv (use conda base /opt/miniconda3 instead)
 .venv/
+
+# YOLO base checkpoint (download before training)
+yolo11n-seg.pt
+*.pt
+
+# Training run outputs (weights, logs, plots)
+runs/
