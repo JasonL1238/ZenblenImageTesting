@@ -108,6 +108,16 @@ function draw() {
     }
   }
 
+  // Empty polygon in edit mode: prompt the user to start drawing.
+  if ((!p || !p.length) && !cutMode) {
+    ctx.save();
+    ctx.fillStyle = "#ffcc00";
+    ctx.font = `${Math.round(22 / cssScale())}px system-ui, sans-serif`;
+    ctx.fillText("click to place points  (Z = undo scrap)",
+                 12 / cssScale(), 40 / cssScale());
+    ctx.restore();
+  }
+
   // Cut-line guide: a full-width horizontal line at the mouse Y. Everything
   // ABOVE it (the foam/rim) is removed on click.
   if (cutMode) {
@@ -252,6 +262,17 @@ document.addEventListener("keydown", (e) => {
       updateMode(); draw(); break;
     case "escape":
       if (cutMode) { cutMode = false; updateMode(); draw(); }
+      break;
+    case "x":
+      // Scrap the polygon entirely — start from scratch. After this, click on
+      // the image to drop new vertices one by one (Z undoes the scrap).
+      if (!editMode) break;
+      if (item.polygon.length) {
+        snapshot();
+        item.polygon = [];
+        cutMode = false; dragIndex = -1;
+        markDirty(); draw();
+      }
       break;
     case "z":
       if (undoStack.length) {
