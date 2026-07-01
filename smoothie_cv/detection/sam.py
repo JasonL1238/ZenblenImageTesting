@@ -102,6 +102,82 @@ def _prompt_points(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
     return coords, labels
 
 
+def _smoothie_prompt_points(h: int, w: int) -> tuple[np.ndarray, np.ndarray]:
+    """Prompt tuned for the LIQUID body, not the container.
+
+    Positives sit on the central column plus two lateral points so SAM captures
+    the full width of the fill. Negatives sit at the four corners AND high on the
+    centre line — the clear headspace / cup rim above the liquid surface — so SAM
+    cuts at the liquid top instead of grabbing the empty rim, lid, or straw.
+    """
+    cx = w // 2
+    pos = [
+        (cx, int(h * 0.40)),
+        (cx, int(h * 0.55)),
+        (cx, int(h * 0.70)),
+        (int(w * 0.32), int(h * 0.55)),
+        (int(w * 0.68), int(h * 0.55)),
+    ]
+    mx, my = int(w * 0.04), int(h * 0.04)
+    neg = [
+        (mx, my), (w - mx, my), (mx, h - my), (w - mx, h - my),  # corners: frame/machine
+        (cx, int(h * 0.06)),                                     # rim / headspace above liquid
+    ]
+    coords = np.array(pos + neg, dtype=np.float32)
+    labels = np.array([1] * len(pos) + [0] * len(neg), dtype=np.int32)
+    return coords, labels
+
+
+def detect_smoothie(
+    image: np.ndarray,
+    config: Config | None = None,
+    model_name: str | None = None,
+) -> tuple[np.ndarray, BBox | None]:
+    """Segment the visible SMOOTHIE/LIQUID region (not the whole container).
+
+    Unlike :func:`detect_sam` (which applies container priors — top flatten,
+    gasket extend, side refine — to recover the full cup footprint), this takes
+    the RAW highest-scoring SAM mask of the central liquid mass, keeps the largest
+    filled blob, and stops there. That leaves the true liquid surface at the top
+    for the human labeller to fine-tune, rather than a straightened cup rim.
+
+    Returns the standard detector contract ``(mask uint8 255-inside, bbox|None)``.
+    """
+    import cv2
+    import torch
+
+    if config is None:
+        config = Config()
+    model_name = model_name or config.sam_model
+
+    h, w = image.shape[:2]
+    frame_area = float(h * w)
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    predictor = _get_predictor(model_name)
+    coords, labels = _smoothie_prompt_points(h, w)
+
+    with torch.inference_mode():
+        predictor.set_image(rgb)
+        masks, scores, _ = predictor.predict(
+            point_coords=coords, point_labels=labels, multimask_output=True,
+        )
+
+    best_idx, best_score = -1, -1.0
+    for i, m in enumerate(masks):
+        frac = float(m.sum()) / frame_area
+        if _MIN_AREA_FRAC <= frac <= _MAX_AREA_FRAC and scores[i] > best_score:
+            best_idx, best_score = i, float(scores[i])
+    if best_idx < 0:
+        best_idx = int(np.argmax(scores))
+
+    raw = (masks[best_idx] > 0).astype(np.uint8) * 255
+    filled, bbox = _largest_filled(raw)
+    if filled is None:
+        return np.zeros((h, w), dtype=np.uint8), None
+    return filled, bbox
+
+
 def detect_sam(
     image: np.ndarray,
     config: Config | None = None,

@@ -13,5 +13,16 @@ outputs/
 # Environment / secrets
 .env
 
+# Labeling tool artefacts (downloaded images, SAM caches, verdicts, dataset)
+labeling/data/
+labeling/dataset/
+labeling/labels.db
+labeling/labels.db-*
+
+# Dataset pipeline output (master annotations, generated masks, exports) — the
+# CODE that builds these is committed; the generated data is not.
+smoothie_dataset/
+debug_outputs/
+
 # Python virtualenv (use conda base /opt/miniconda3 instead)
 .venv/
