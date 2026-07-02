@@ -173,12 +173,40 @@ class ClassicalCVPipeline(BlendPipeline):
         interior = cv2.erode(roi_mask, ek, iterations=1)
         mi = (interior > 0)
 
-        # masked large blur → local base colour (avoids outside-contour black bleed)
-        K = cfg.dev_blur_kernel | 1  # force odd
-        denom = cv2.GaussianBlur(m, (K, K), 0) + 1e-6
-        base = np.dstack([cv2.GaussianBlur(lab[:, :, i] * m, (K, K), 0) / denom for i in range(3)])
-        dE = np.sqrt(((lab - base) ** 2).sum(axis=2))
+        # ROI bounds — needed for the bright-neutral bottom exemption and foam cut.
+        ys, xs = np.where(roi_mask > 0)
+        y_top, y_bot = int(ys.min()), int(ys.max())
+        x_left, x_right = int(xs.min()), int(xs.max())
+        roi_h = max(y_bot - y_top, 1)
+        roi_w = max(x_right - x_left, 1)
+        foam_cut = int(y_top + cfg.dev_foam_frac * roi_h)
+        exempt_y = (int(y_top + (1.0 - cfg.dev_bright_bot_exempt_frac) * roi_h)
+                    if cfg.dev_bright_bot_exempt_frac > 0 else y_bot + 1)
 
+        L, A, B = lab[:, :, 0], lab[:, :, 1], lab[:, :, 2]
+        chroma = np.sqrt((A - 128.0) ** 2 + (B - 128.0) ** 2)
+
+        # masked large blur → local base colour (avoids outside-contour black bleed).
+        # TWO passes: printed logo text is bright enough to pull the pass-1 base UP
+        # in its whole K-neighbourhood, so ordinary smoothie between/inside letters
+        # reads "darker than base" (the print's counter-shadow) and letter pixels
+        # read less bright than they are. Pass 2 re-estimates the base from
+        # smoothie pixels ONLY — print-signature pixels are excluded from the blur
+        # exactly like outside-ROI pixels. The bottom zone keeps pass-1 behaviour
+        # (cream masses are bright+neutral; their handling is the exemption's job).
+        K = cfg.dev_blur_kernel | 1  # force odd
+        def _masked_base(weight: np.ndarray) -> np.ndarray:
+            den = cv2.GaussianBlur(weight, (K, K), 0) + 1e-6
+            return np.dstack([cv2.GaussianBlur(lab[:, :, i] * weight, (K, K), 0) / den
+                              for i in range(3)])
+
+        base = _masked_base(m)
+        print_px = (L - base[:, :, 0] > cfg.dev_bright_dL) & (chroma < cfg.dev_bright_chroma)
+        print_px[exempt_y:, :] = False
+        if print_px.any():
+            base = _masked_base(m * (~print_px))
+
+        dE = np.sqrt(((lab - base) ** 2).sum(axis=2))
         vals = dE[mi]
         if vals.size == 0:
             return np.zeros(roi_mask.shape, np.uint8)
@@ -187,17 +215,7 @@ class ClassicalCVPipeline(BlendPipeline):
         thr = max(thr, cfg.dev_min_delta_e)  # floor: ignore trivially small deviations
         raw = ((dE >= thr) & mi).astype(np.uint8) * 255
 
-        # ROI bounds — needed here for the bright-neutral bottom exemption and foam cut.
-        ys, xs = np.where(roi_mask > 0)
-        y_top, y_bot = int(ys.min()), int(ys.max())
-        x_left, x_right = int(xs.min()), int(xs.max())
-        roi_h = max(y_bot - y_top, 1)
-        roi_w = max(x_right - x_left, 1)
-        foam_cut = int(y_top + cfg.dev_foam_frac * roi_h)
-
         # drop specular glare: very bright + low chroma (LAB a,b centred at 128)
-        L, A, B = lab[:, :, 0], lab[:, :, 1], lab[:, :, 2]
-        chroma = np.sqrt((A - 128.0) ** 2 + (B - 128.0) ** 2)
         base_chroma = np.sqrt((base[:, :, 1] - 128.0) ** 2 + (base[:, :, 2] - 128.0) ** 2)
         dC = chroma - base_chroma  # +ve = more saturated than local base (coloured chunk)
         glare = (L > cfg.dev_glare_L) & (chroma < cfg.dev_glare_chroma)
@@ -214,9 +232,7 @@ class ClassicalCVPipeline(BlendPipeline):
         # them with the dark smoothie above → they look "logo-like").  The logo never
         # appears in the last dev_bright_bot_exempt_frac of the cup, so this exemption
         # recovers bottom chunks without touching the logo zone.
-        if cfg.dev_bright_bot_exempt_frac > 0:
-            exempt_y = int(y_top + (1.0 - cfg.dev_bright_bot_exempt_frac) * roi_h)
-            bright_neutral[exempt_y:, :] = False
+        bright_neutral[exempt_y:, :] = False
         raw[bright_neutral] = 0
 
         # despeckle (small open only). No close — keep logo letters as separate
@@ -224,6 +240,18 @@ class ClassicalCVPipeline(BlendPipeline):
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         clean = cv2.morphologyEx(raw, cv2.MORPH_OPEN, k)
         clean[:foam_cut, :] = 0
+
+        # print halo: the bright-neutral suppression removes printed letters from the
+        # map, but the K=121 base around them stays pulled up by their brightness, so
+        # adjacent smoothie reads "darker than base" (print's counter-shadow). Dark
+        # components living mostly inside this halo are rejected in the loop below.
+        d = cfg.dev_dark_print_adj_dilate
+        ck = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (d * 2 + 1, d * 2 + 1))
+        # CLOSE first: letter counters and inter-letter gaps (the "n" counter etc.)
+        # are enclosed by strokes and belong to the print footprint; then dilate
+        # outward to cover the base-contamination fringe.
+        print_halo = cv2.dilate(
+            cv2.morphologyEx(bright_neutral.astype(np.uint8), cv2.MORPH_CLOSE, ck), ck) > 0
 
         # connected components → classify the "zenblen" logo (a horizontal row of
         # similar-height marks spanning a wide extent) and exclude it, then keep
@@ -234,7 +262,17 @@ class ClassicalCVPipeline(BlendPipeline):
         # per-pixel deviation vector from local base (for directional growth below)
         dev = lab - base
 
+        # doubly-eroded interior: used to reject rim/wall-junction artifacts in the
+        # meniscus band (they hug the ROI contour; real surface lumps are interior).
+        ek2 = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (erode_px * 4 + 1, erode_px * 4 + 1))
+        interior2 = cv2.erode(roi_mask, ek2, iterations=1) > 0
+
         roi_area = int((roi_mask > 0).sum())
+        # bottom exempt line for the component-level print/glare rejection below —
+        # same zone as the pixel-level bright-neutral exemption (cream masses at the
+        # cup bottom share the bright+desaturating signature of the logo).
+        comp_exempt_y = int(y_top + (1.0 - cfg.dev_bright_bot_exempt_frac) * roi_h)
         out = np.zeros(roi_mask.shape, np.uint8)
         grow_seed_masks: list[np.ndarray] = []  # seeds large enough to grow
         for lab_i in range(1, n):
@@ -264,6 +302,17 @@ class ClassicalCVPipeline(BlendPipeline):
             mean_dC = float(dC[comp_mask].mean())
             mean_dE = float(dE[comp_mask].mean())
 
+            # component-level print/glare rejection: much BRIGHTER than the local
+            # base and DESATURATING vs it — the logo/glare signature (a real chunk
+            # is darker or more saturated). Catches lone clipped logo letters that
+            # defeat both the pixel-level bright-neutral rule (absolute chroma rides
+            # above dev_bright_chroma on saturated smoothies) and the text-line
+            # detector (<3 letters in frame). Bottom zone exempt: cream masses.
+            if (mean_dL > cfg.dev_bright_dL
+                    and mean_dC < cfg.dev_comp_bright_dC_max
+                    and cents[lab_i][1] < comp_exempt_y):
+                continue
+
             # Path 1 — compact solid blob (clear chunks, any colour). Strict shape +
             # strict aspect + strict area, and the original ΔE floor: this path carries
             # no colour cue, so its precision rests on shape + a strong deviation. (The
@@ -276,16 +325,30 @@ class ClassicalCVPipeline(BlendPipeline):
             # chunk's dark rim) come back as a thin arc that fails the compact gate,
             # but they are distinctly DARKER than the local base. The cream logo and
             # glare are BRIGHTER, so the darkness gate recovers these without them.
+            halo_frac = float(print_halo[comp_mask].mean())
             dark = (mean_dL <= cfg.dev_dark_dL
                     and solidity >= cfg.dev_dark_min_solidity
-                    and extent >= cfg.dev_dark_min_extent)
+                    and extent >= cfg.dev_dark_min_extent
+                    # print counter-shadow rejection + meniscus-band position gate
+                    # (real dark chunks sit at y_frac ≥ 0.18 and outside print)
+                    and halo_frac < cfg.dev_dark_print_adj_frac
+                    and cents[lab_i][1] >= y_top + cfg.dev_relaxed_top_frac * roi_h)
             # Path 3 — chroma deviation: hue-similar chunks (orange-on-yellow, amber
             # flecks) are NOT darker than base so Path 2 misses them, but they are more
             # SATURATED than base. Glare/highlights/logo desaturate (mean_dC < 0), so
             # this gate spares them — same precision principle as the darkness gate.
+            # brightness ceiling: warm print on pale cups is MORE saturated than the
+            # body (dC>0, defeating the desaturation assumption) but backlit-bright
+            # (ΔL +11…+14); pigmented fruit never gains brightness (ΔL −8…+1).
+            in_band = cents[lab_i][1] < y_top + cfg.dev_relaxed_top_frac * roi_h
             chromatic = (mean_dC >= cfg.dev_chroma_dC
+                         and mean_dL <= cfg.dev_chroma_dL_max
                          and solidity >= cfg.dev_dark_min_solidity
-                         and extent >= cfg.dev_dark_min_extent)
+                         and extent >= cfg.dev_dark_min_extent
+                         # meniscus band: rim/wall-junction slivers hug the contour;
+                         # a real surface lump is deeply interior
+                         and (not in_band or float(interior2[comp_mask].mean())
+                              >= cfg.dev_chroma_band_interior))
             # the colour-cued paths (dark/chroma) may be elongated streaks → relaxed
             # aspect; logo strokes are excluded by neutrality (mean_dC<0, mean_dL>0).
             colour_cued = (dark or chromatic) and aspect <= cfg.dev_relaxed_aspect_hi
@@ -322,6 +385,36 @@ class ClassicalCVPipeline(BlendPipeline):
             field[:foam_cut, :] = 0
             seed = seed_mask.astype(np.uint8) * 255
             out = cv2.bitwise_or(out, self._reconstruct(seed, field, cfg.dev_grow_max_iter))
+
+        # ── Path 7: chroma-plane deviation ────────────────────────────────────
+        # Hue-similar lumps on pale bodies deviate almost purely in chroma with
+        # total ΔE below the global floor, so the dE map never sees them. Threshold
+        # the dC map with its own adaptive threshold; precision comes from the same
+        # relative-colour gates as the chroma path (saturated but NOT brighter than
+        # base — print/glare brighten or desaturate) plus the shared exclusions.
+        if cfg.dev_chroma_plane_enable:
+            dc_vals = dC[mi]
+            dc_thr = max(float(dc_vals.mean() + cfg.dev_chroma_plane_k_sigma
+                               * dc_vals.std()), cfg.dev_chroma_plane_min_dC)
+            dc_raw = ((dC >= dc_thr) & mi).astype(np.uint8) * 255
+            dc_raw[glare | bright_neutral] = 0
+            dc_raw[:foam_cut, :] = 0
+            dc_clean = cv2.morphologyEx(dc_raw, cv2.MORPH_OPEN, k)
+            n_c, labels_c, stats_c, cents_c = cv2.connectedComponentsWithStats(
+                dc_clean, connectivity=8)
+            for li in range(1, n_c):
+                area_c = int(stats_c[li, cv2.CC_STAT_AREA])
+                if (area_c < cfg.dev_chroma_plane_min_area
+                        or area_c > roi_area * cfg.dev_max_area_frac):
+                    continue
+                cm = labels_c == li
+                if float(dL[cm].mean()) > cfg.dev_chroma_dL_max:
+                    continue          # brighter than base → print/glare, not pigment
+                if cents_c[li][1] < y_top + cfg.dev_relaxed_top_frac * roi_h:
+                    continue          # meniscus band
+                if float(print_halo[cm].mean()) >= cfg.dev_dark_print_adj_frac:
+                    continue          # inside the print footprint
+                out[cm] = 255
 
         # ── Path 4: bottom absolute-chroma gate ──────────────────────────────
         # Cups with unblended cream/white masses at the cup bottom have nearly
@@ -412,9 +505,29 @@ class ClassicalCVPipeline(BlendPipeline):
                 global_clean = cv2.morphologyEx(global_clean, cv2.MORPH_OPEN, k5)
                 n_g, labels_g, stats_g, _ = cv2.connectedComponentsWithStats(
                     global_clean, connectivity=8)
+                # full-ROI cream field for reconstruction: the accepted mass often
+                # extends into the dev_roi_erode boundary band (cream rests against
+                # the cup wall/gasket), which mi excludes. dE_ref has no masked-blur
+                # boundary artifact, so growing into the un-eroded ROI is sound; the
+                # L floor keeps the dark gasket edge from joining the mass.
+                cream_field = ((roi_mask > 0) & (dE_ref >= cfg.dev_global_thr)
+                               & neutral_vs_ref
+                               & (lab[:, :, 0] >= cfg.dev_botband_L_lo))
+                cream_field[:max(target_top_y, foam_cut), :] = False
+                cream_field_u8 = cream_field.astype(np.uint8) * 255
+                # bottom-attachment gate: cream is heavy and rests on the cup
+                # bottom/gasket; the diffuse backlit glare glow floats mid-low cup.
+                # Require the component to reach near the ROI's last row.
+                attach_y = y_bot - int(cfg.dev_global_bot_attach_frac * roi_h)
                 for li in range(1, n_g):
-                    if int(stats_g[li, cv2.CC_STAT_AREA]) >= cfg.dev_global_min_area:
-                        out[labels_g == li] = 255
+                    comp_bot = (int(stats_g[li, cv2.CC_STAT_TOP])
+                                + int(stats_g[li, cv2.CC_STAT_HEIGHT]) - 1)
+                    if (int(stats_g[li, cv2.CC_STAT_AREA]) >= cfg.dev_global_min_area
+                            and comp_bot >= attach_y):
+                        comp = ((labels_g == li).astype(np.uint8)) * 255
+                        out = cv2.bitwise_or(
+                            out, self._reconstruct(comp, cream_field_u8,
+                                                   cfg.dev_grow_max_iter))
 
         return out
 

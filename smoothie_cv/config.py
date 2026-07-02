@@ -60,9 +60,43 @@ class Config:
     # preserves precision the same way darkness does: glare/highlights/logo DESATURATE
     # (ΔchromaC < 0), so they never pass — only genuinely coloured lumps do.
     dev_chroma_dC: float = 8.0        # component mean ΔchromaC must exceed this (more saturated)
+    dev_chroma_band_interior: float = 0.7  # a chroma-path component whose centroid is ABOVE the
+                                           # dev_relaxed_top_frac line (meniscus band) must have
+                                           # ≥ this fraction of its area inside a doubly-eroded
+                                           # (2×dev_roi_erode) ROI interior. The rim/wall junction
+                                           # produces saturated dark slivers HUGGING the contour
+                                           # (measured 0.28 interior); a real lump floating on the
+                                           # surface is surrounded by smoothie (measured 1.00).
+                                           # Below the band no interiority is required.
+    dev_chroma_dL_max: float = 5.0    # chroma-path brightness ceiling: the component must NOT
+                                      # be brighter than the local base by more than this.
+                                      # Pigmented fruit absorbs light — measured real chroma-path
+                                      # chunks sit at mean ΔL −8…+1 — while warm backlit print
+                                      # (logo fragments on pale/tan cups, where cream ink is MORE
+                                      # saturated than the body, defeating the dC<0 assumption)
+                                      # sits at ΔL +11…+14. Brightness is the discriminator.
     # relaxed shape gates shared by the dark + chroma paths (both already carry a
     # colour/darkness cue that logo text lacks, so shape can be looser than compact).
     dev_relaxed_min_area: int = 90    # min blob area for the colour-cued paths (< dev_min_area)
+    dev_relaxed_top_frac: float = 0.18  # DARK-path components must have their centroid below
+                                        # this fraction of ROI height. The meniscus SHADOW band
+                                        # hangs just below the foam cut (0.16) and fires the dark
+                                        # path when the ROI's top geometry shifts (YOLO vs SAM);
+                                        # measured real dark chunks sit at y_frac ≥ 0.29 — same
+                                        # finding that set the foam cut ("real chunks sit at
+                                        # y_frac≥0.18"). NOT applied to the chroma path: a real
+                                        # saturated lump can ride at the surface (f0b6a6d1), and
+                                        # chroma-path print FPs are already killed by the
+                                        # dev_chroma_dL_max brightness ceiling.
+    # dark-path print-shadow rejection: pixel-level bright-neutral suppression removes
+    # printed letters from the ΔE map, but the K=121 local base around them stays
+    # PULLED UP by their brightness, so the ordinary smoothie between/around letters
+    # measures as "darker than base" and fires the dark path (print's counter-shadow).
+    # A dark component whose area mostly lies inside the dilated print (bright-neutral)
+    # halo is that artifact, not a chunk — real dark chunks don't live inside print.
+    dev_dark_print_adj_dilate: int = 7     # px dilation of the bright-neutral mask → print halo
+    dev_dark_print_adj_frac: float = 0.5   # reject dark components with ≥ this fraction of
+                                           # their area inside the halo
     dev_relaxed_aspect_hi: float = 5.0  # colour-cued chunks may be elongated streaks; logo
                                         # strokes are excluded by neutrality, not aspect
     # hysteresis region-grow: the strict gates above find the high-contrast CORE of a
@@ -91,11 +125,17 @@ class Config:
                                         # growth on the genuine fading margin, not flat smoothie.
     dev_grow_max_iter: int = 40         # bound growth to ~40 px from the seed (reach the
                                         # tail of larger lumps, but can't crawl across the cup)
-    dev_grow_min_seed_area: int = 200   # only GROW seeds at least this big (a confident
+    dev_grow_min_seed_area: int = 100   # only GROW seeds at least this big (a confident
                                         # chunk core worth completing). Tiny marginal seeds
                                         # (logo letter, rim glare, lone fleck) are kept as-is
                                         # but NOT amplified — growth must not flip a near-clean
                                         # smoothie to flagged on a borderline speck.
+                                        # 200→100: with the component-level print/glare gates
+                                        # (bright-desat, chroma brightness ceiling, print halo,
+                                        # meniscus position) the seeds that reach growth are
+                                        # far cleaner than when 200 was set; 100 lets a small
+                                        # real chunk core (e.g. afdc6c3e's 102px lump) complete
+                                        # to its true extent instead of stalling sub-flag.
     # global (reference-band) deviation — catches large monochromatic regions
     # (e.g. a pale cream mass at the bottom of a dark smoothie) that are invisible
     # to the K=121 local blur because the Gaussian spans the whole region and
@@ -118,7 +158,13 @@ class Config:
     #     primary precision controls; requiring low local-ΔE would silently drop
     #     the chunk boundary pixels (where K=121 straddles cream and dark smoothie).
     #   - Foam band is always excluded (foam_cut already applied to out).
-    dev_global_enable: bool = False  # disabled: bright-neutral exemption handles bottom chunks
+    dev_global_enable: bool = True   # re-enabled: with ROIs that reach the true cup bottom
+                                     # (YOLO-seg / gasket-complete masks), large cream masses
+                                     # sit fully INSIDE the ROI where K=121 adapts to them —
+                                     # paths 1–3 see ΔE≈0 and Path 4's last-rows gate can sit
+                                     # on gasket pixels and miss. This pass segments the mass
+                                     # body itself (additive; area-gated ≥1500px; does not
+                                     # perturb the adaptive per-image threshold).
     dev_global_thr: float = 22.0            # ΔE from reference band to flag a pixel
     dev_global_chroma_drop: float = 12.0    # detected pixels must be ≥ this many chroma
                                             # units LESS saturated than the reference band
@@ -126,15 +172,54 @@ class Config:
                                             # smoothie gradient, still reddish) from firing;
                                             # cream/neutral masses have chroma drop ≥ 20.
     dev_global_min_area: int = 1500         # min connected-component area (px)
+    dev_global_bot_attach_frac: float = 0.05  # a component must reach within this fraction
+                                              # of ROI height of the ROI's LAST row. Unblended
+                                              # cream is heavy — it sinks and RESTS on the cup
+                                              # bottom/gasket; the diffuse backlit glare glow
+                                              # (condensation halo) floats mid-low cup, detached
+                                              # from the bottom rows. Bottom attachment is the
+                                              # physical discriminator between the two — without
+                                              # it the pass flags the glow on many clean cups.
     dev_global_ref_top_frac: float = 0.45   # reference band top (fraction of ROI height)
     dev_global_ref_bot_frac: float = 0.62   # reference band bottom
     dev_global_target_top_frac: float = 0.62  # lower zone starts here
+
+    # ── Path 7: chroma-plane deviation ────────────────────────────────────────
+    # Hue-similar lumps on PALE bodies (soft mango spots on pale yellow, 636e83f4)
+    # deviate almost purely in CHROMA (dC≈+8…10) with total ΔE below the global
+    # floor (12), so they never form components in the dE map. Threshold the dC
+    # map directly with its own adaptive threshold (mean + k·σ of dC inside the
+    # ROI, floored). Precision reuses the established relative-colour gates: a
+    # component must be saturated-not-bright (dev_chroma_dL_max ceiling — print
+    # and glare desaturate or brighten), sit below the meniscus band, and clear
+    # the same glare/bright-neutral/foam exclusions as every other path.
+    # DISABLED — measured signal-floor dead end (2026-07-02, same conclusion as the
+    # k_sigma experiments): on the 92-set it recovers 1 real cup (636e83f4, lumps
+    # at dC +8.6…+9.7) but flips 4 audited-clean cups whose embossed-ridge /
+    # glow-rim strips measure dC +7.7…+9.6 — ZERO separating margin at this
+    # contrast. Keep the code for if a polarizer/diffuse-light upgrade lifts the
+    # floor; do NOT enable and tune thresholds — there is no threshold to find.
+    dev_chroma_plane_enable: bool = False
+    dev_chroma_plane_k_sigma: float = 2.5   # adaptive: mean + k·σ of the dC map in ROI
+    dev_chroma_plane_min_dC: float = 7.0    # floor on the threshold (LAB chroma units)
+    dev_chroma_plane_min_area: int = 90     # same floor as the other colour-cued paths
 
     dev_glare_L: float = 240.0     # LAB L* above this + low chroma = specular glare
     dev_glare_chroma: float = 12.0
     # printed-logo / backlit-text exclusion: bright-vs-base + low chroma (cream text)
     dev_bright_dL: float = 25.0    # ΔL above local base to be considered "bright text"
     dev_bright_chroma: float = 22.0
+    # COMPONENT-level print/glare rejection (complements the pixel-level rule above):
+    # a component much brighter than the local base (mean ΔL > dev_bright_dL) that
+    # also DESATURATES vs base (mean ΔchromaC below this) is printed logo text or
+    # glare, never a chunk — real chunks are darker than base or more saturated.
+    # This catches logo letters the pixel rule misses on saturated smoothies, where
+    # cream print picks up enough absolute chroma to ride above dev_bright_chroma,
+    # and the text-line detector can't fire because <3 letters are in frame (the
+    # word clipped at the image edge, e.g. "ze…"). Keyed on colour RELATIVE to the
+    # local base, so it holds across shades. The bottom exempt zone below still
+    # applies — cream masses at the cup bottom are bright+desaturating too.
+    dev_comp_bright_dC_max: float = 0.0
     # Cream/pale unblended masses at the CUP BOTTOM share the same bright+neutral
     # signature as the logo (high dL vs local base, low chroma) because the K=121
     # kernel mixes the cream with the dark smoothie above, making the base dark and

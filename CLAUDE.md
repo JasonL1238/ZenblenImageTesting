@@ -36,6 +36,31 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   separates them. Handled by `_logo_text_labels()`: the logo is a horizontal ROW of
   similar-height marks spanning a wide extent; a chunk is a lone compact blob. Logo
   components are detected from the SAME ΔE map that fires the FP, then excluded.
+- TWO-PASS BASE: bright print pulls the pass-1 K=121 base UP around the letters, so
+  ordinary smoothie between/inside them reads "darker than base" — the print's
+  COUNTER-SHADOW (dark-path FP, e.g. the blob in the "n" counter on 28fe/560d).
+  Pass 2 re-estimates the base EXCLUDING print-signature pixels (ΔL>+25 + absolute
+  chroma<22) from the masked blur, like outside-ROI pixels. Root-cause fix: the
+  counter-shadow never forms, and letters contrast harder (text-line detector sees
+  them more reliably). Bottom zone keeps pass-1 behaviour (cream exemption intact).
+- COMPONENT-LEVEL print/glare gates (added when YOLO ROIs shifted the adaptive
+  threshold and let single-letter fragments through; all keyed on colour RELATIVE
+  to base or ROI geometry — no absolute colours, hold across shades):
+  - bright-desat: mean ΔL > +25 AND mean ΔC < 0 above the bottom exempt zone =
+    print/glare, reject. Kills lone CLIPPED letters ("ze…" at the frame edge,
+    e89d/c7d2) that defeat the ≥3-letter text-line detector and ride above the
+    absolute-chroma pixel rule on saturated smoothies.
+  - chroma-path brightness ceiling `dev_chroma_dL_max`=+5: on PALE/tan cups warm
+    print is MORE saturated than the body (ΔC≈+8 — defeats the "logo desaturates"
+    assumption) but backlit-bright (ΔL +11…+14); real saturated lumps measure
+    ΔL −8…+1 (54121aaf/dbc7 killed; cf4d/99b2/86240 untouched).
+  - dark-path position gate `dev_relaxed_top_frac`=0.18 + print-halo overlap
+    (belt-and-suspenders for the counter-shadow): meniscus shadow hangs just below
+    the foam cut, real dark chunks sit at y_frac ≥ 0.29 (abef9780 killed).
+  - chroma-path meniscus interiority `dev_chroma_band_interior`=0.7: in the band
+    above 0.18, rim/wall-junction slivers HUG the ROI contour (measured 0.28
+    interior at 2×erode) while a real surface lump is fully interior (1.00,
+    f0b6a6d1 kept, 5149243f killed).
 - Chunks pass via THREE acceptance paths + foam-band cutoff + bright-neutral exclusion
   (cream logo/glare). Each colour-cued path carries a precision-preserving cue, so it
   can relax shape (`dev_relaxed_min_area`, `dev_relaxed_aspect_hi`) without flooding FPs:
@@ -96,16 +121,51 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   NOT "cream below ROI" (the earlier diagnosis was wrong). Correctly stays clean.
   NOTE: when Path 5 fires, `BlendResult.mask` contains pixels BELOW the input ROI (the
   extended cream band); the "mask ⊆ input ROI" invariant becomes "mask ⊆ ROI ∪ cream band".
+- PATH 6 (reference-band pass, `dev_global_enable`, re-enabled 2026-07): with ROIs
+  that reach the true cup bottom (YOLO-seg), large cream masses sit fully INSIDE the
+  ROI where K=121 adapts to them (paths 1–3 blind) and Path 4's last-rows gate can
+  sit on gasket pixels and miss. This pass compares the lower zone against a mid-cup
+  reference band (ΔE≥22 + chroma-drop≥12, additive — does NOT perturb the adaptive
+  threshold). Precision gates, each killing a distinct look-alike:
+    - area ≥ 1500px (logo letters, glare specks)
+    - BOTTOM ATTACHMENT `dev_global_bot_attach_frac`: cream is heavy and RESTS on
+      the gasket; the diffuse backlit condensation glow floats mid-low cup detached
+      from the last rows — without this gate the glow flags ~6 clean cups
+      (3fe5f4c7, f0688700, e0ef3dcf, …).
+    - accepted components are geodesically reconstructed into the UN-eroded ROI
+      (dE_ref has no masked-blur boundary artifact) with an L≥100 floor so the mass
+      fills to the cup wall/gasket without grabbing the dark gasket edge.
+  Result: 749a/50e294 cream masses ~fully covered under YOLO ROIs (1940→5716px,
+  1439→3854px) instead of edge fragments.
+- YOLO ROI masks are HOLE-FILLED at the source (`get_yolo_roi`): a liquid mask is
+  simply connected; the model punching holes over logo letters breaks the text-line
+  logo exclusion (the word is no longer a row of marks inside the ROI → 28fe82f8).
+- `dev_grow_min_seed_area` 200→100: with the component gates above, surviving seeds
+  are clean enough to grow; recovers small real chunks that stalled sub-flag under
+  YOLO ROI threshold shifts (afdc6c3e 102→547px, 8343d981 112→625px).
 - KNOWN LIMIT: scattered tiny low-contrast flecks (dE≈8–12, <90px) on red/pink cups are
   NOT detected. They sit at the SAME local-contrast level as benign texture on truly
   well-blended cups (verified: a local black-tophat fires ~equally on clean 2e7754a and
   on chunky 4c68), so no global OR local threshold separates them without flooding FPs.
   This is a signal-floor limit, not a tuning gap — leave it unless a different sensor /
   per-region model is introduced.
+  SAME FLOOR, CHROMA PLANE (measured 2026-07): soft hue-similar lumps on pale yellow
+  (636e83f4, dC +8.6…+9.7, total ΔE < 12) are inseparable from the embossed-ridge /
+  glow-rim strips on audited-clean tan cups (dC +7.7…+9.6) — a chroma-plane deviation
+  path (Path 7, `dev_chroma_plane_enable`, kept DISABLED) recovers 1 cup and flips 4
+  clean ones. Zero margin; do not tune, fix optics. Also still missed: 0ad03494
+  (documented mid-bottom cream, interleaved with clean cups) and dd4d2902 (frame
+  unanalyzable: cup behind frost/condensation — capture QA issue, both ROIs poor).
 - Validate across the dataset: `python scripts/validate_chunks.py` (uses cached SAM
   ROIs in `outputs/roi_cache/`; regenerate with `python scripts/cache_sam_rois.py`).
   Writes a clean report to `outputs/report/`: `flagged.png` (flagged smoothies,
   original vs detection side-by-side), `scores.csv`, `README.md`, `overlays/` (all 92).
+- YOLO-ROI validation: `python scripts/validate_chunks_yolo.py --roi-cache
+  outputs/roi_cache_yolo_v3` (cache with `scripts/cache_yolo_rois.py`; omit
+  --roi-cache to run the model live). Diffs verdicts vs the SAM baseline
+  (outputs/report/scores.csv). Compare any two runs: `scripts/diff_reports.py a b`.
+  Per-image gate tracing: `scripts/debug_chunk_paths.py <stem> [--roi sam|yolo]`
+  (MUST be kept in sync with `_deviation_mask` — it replicates the logic).
 
 # Code style
 - Type-hint all public function signatures

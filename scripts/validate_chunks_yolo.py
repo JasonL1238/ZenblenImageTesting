@@ -36,6 +36,17 @@ PAIR_W        = 230
 PAIRS_PER_ROW = 3
 
 
+def fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill interior holes: a container/liquid mask is simply connected, so any
+    enclosed hole (e.g. the model excising a printed logo letter) is a
+    segmentation artifact. Holes over logo letters break the text-line logo
+    exclusion downstream (the word is no longer a row of marks inside the ROI)."""
+    h, w = mask.shape
+    ff = mask.copy()
+    cv2.floodFill(ff, np.zeros((h + 2, w + 2), np.uint8), (0, 0), 255)
+    return mask | cv2.bitwise_not(ff)
+
+
 def get_yolo_roi(result, shape: tuple[int, int]) -> np.ndarray:
     h, w = shape
     if result.masks is None or len(result.masks) == 0:
@@ -44,7 +55,7 @@ def get_yolo_roi(result, shape: tuple[int, int]) -> np.ndarray:
     idx   = int(np.argmax(confs))
     raw   = result.masks.data[idx].cpu().numpy()
     m     = cv2.resize(raw, (w, h), interpolation=cv2.INTER_NEAREST)
-    return ((m > 0.5) * 255).astype(np.uint8)
+    return fill_holes(((m > 0.5) * 255).astype(np.uint8))
 
 
 def load_sam_baseline(path: Path) -> dict[str, str]:
@@ -85,19 +96,24 @@ def main() -> None:
     ap.add_argument("--weights", default="runs/smoothie-seg/nano-v3/weights/best.pt")
     ap.add_argument("--tag",     default="v3",
                     help="label for output folder (outputs/report_yolo_<tag>/)")
+    ap.add_argument("--roi-cache", default=None,
+                    help="dir of cached <stem>.png ROI masks (scripts/cache_yolo_rois.py); "
+                         "skips model inference for fast chunk-detector iteration")
     args = ap.parse_args()
-
-    weights = Path(args.weights)
-    if not weights.exists():
-        print(f"ERROR: weights not found: {weights}")
-        sys.exit(1)
 
     out      = Path(f"outputs/report_yolo_{args.tag}")
     overlays = out / "overlays"
     overlays.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading YOLO {args.tag} ({weights}) …")
-    model = YOLO(str(weights))
+    roi_cache = Path(args.roi_cache) if args.roi_cache else None
+    model = None
+    if roi_cache is None:
+        weights = Path(args.weights)
+        if not weights.exists():
+            print(f"ERROR: weights not found: {weights}")
+            sys.exit(1)
+        print(f"Loading YOLO {args.tag} ({weights}) …")
+        model = YOLO(str(weights))
     cfg   = Config()
     pipe  = ClassicalCVPipeline(cfg)
 
@@ -113,7 +129,14 @@ def main() -> None:
             continue
         h, w = img.shape[:2]
 
-        yolo_roi = get_yolo_roi(model(img, verbose=False)[0], (h, w))
+        if roi_cache is not None:
+            cached = roi_cache / f"{p.stem}.png"
+            yolo_roi = (cv2.imread(str(cached), cv2.IMREAD_GRAYSCALE)
+                        if cached.exists() else None)
+            if yolo_roi is None:
+                yolo_roi = np.zeros((h, w), dtype=np.uint8)
+        else:
+            yolo_roi = get_yolo_roi(model(img, verbose=False)[0], (h, w))
         no_det   = yolo_roi.sum() == 0
 
         if no_det:
