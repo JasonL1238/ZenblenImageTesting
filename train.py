@@ -21,7 +21,7 @@ from ultralytics import YOLO
 
 DATA_YAML = Path("smoothie_dataset/exports/yolo_seg/data.yaml")
 BASE_MODEL = "yolo11n-seg.pt"   # nano; swap to yolo11s-seg.pt for more capacity
-RUN_NAME   = "nano-v4"          # bump each retrain (v3 = currently deployed)
+RUN_NAME   = "nano-v5"          # bump each retrain (v4 = previously deployed)
 
 # MPS (Apple Silicon) segfaults with YOLO segmentation — always use CPU here.
 DEVICE = "cpu"
