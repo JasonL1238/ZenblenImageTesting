@@ -1,5 +1,8 @@
 """Compare YOLO-seg container detection vs cached SAM ROI masks across all 92 images.
 
+SAM is the training-free reference detector — use this after training a new
+YOLO model to sanity-check its masks before promoting the weights.
+
 Outputs (under outputs/yolo_vs_sam/):
   comparison_grid.png   — side-by-side: original | SAM mask | YOLO mask | diff
   scores.csv            — per-image IoU, bbox overlap, YOLO confidence, which is bigger
@@ -7,9 +10,11 @@ Outputs (under outputs/yolo_vs_sam/):
 
 Usage:
   /opt/miniconda3/bin/python scripts/compare_yolo_vs_sam.py
+  /opt/miniconda3/bin/python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/nano-v4/weights/best.pt
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import sys
 from pathlib import Path
@@ -20,8 +25,10 @@ from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-WEIGHTS = Path("runs/smoothie-seg/nano-v2/weights/best.pt")
-CACHE = Path("outputs/roi_cache")
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--weights", default="checkpoints/yolo_smoothie_seg.pt")
+WEIGHTS = Path(_ap.parse_args().weights)
+CACHE = Path("outputs/roi_cache_sam")
 IMG_DIRS = [Path("data/images/red_pink"), Path("data/images/yellow")]
 OUT = Path("outputs/yolo_vs_sam")
 OUT.mkdir(parents=True, exist_ok=True)

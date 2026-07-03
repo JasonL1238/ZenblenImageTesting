@@ -2,11 +2,11 @@
 
 Re-runs the deviation detector's component loop with full per-component logging:
 which components exist after thresholding/exclusions, which path (compact/dark/
-chroma) accepted each, and what the logo text-line detector saw. Compares SAM vs
-YOLO ROI side by side for the same image.
+chroma) accepted each, and what the logo text-line detector saw. Defaults to the
+active YOLO ROI; --roi both compares SAM vs YOLO side by side.
 
 Usage:
-  /opt/miniconda3/bin/python scripts/debug_chunk_paths.py <stem-prefix> [--roi sam|yolo|both]
+  /opt/miniconda3/bin/python scripts/debug_chunk_paths.py <stem-prefix> [--roi yolo|sam|both]
 """
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ from smoothie_cv.config import Config
 from smoothie_cv.pipelines.classical_cv import ClassicalCVPipeline
 from smoothie_cv.roi import crop_to_roi
 
-SAM_CACHE = Path("outputs/roi_cache")
-YOLO_CACHE = Path("outputs/roi_cache_yolo_v3")
+SAM_CACHE = Path("outputs/roi_cache_sam")
+YOLO_CACHE = Path("outputs/roi_cache_yolo")
 
 
 def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
@@ -91,6 +91,22 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
     n, labels, stats, cents = cv2.connectedComponentsWithStats(clean, connectivity=8)
     logo_labels = pipe._logo_text_labels(stats, cents, n, roi_h, roi_w)
 
+    # confirmed-wordmark band (mirror of _deviation_mask): letter-sized components
+    # whose centroid lands inside a detected wordmark's band are print footprint.
+    logo_band = None
+    if cfg.dev_logo_band_suppress and logo_labels:
+        ll = list(logo_labels)
+        my = cfg.dev_logo_band_margin_frac * float(
+            np.median([stats[i, cv2.CC_STAT_HEIGHT] for i in ll]))
+        med_letter_area = float(np.median([stats[i, cv2.CC_STAT_AREA] for i in ll]))
+        logo_band = (min(stats[i, cv2.CC_STAT_TOP] for i in ll) - my,
+                     max(stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT]
+                         for i in ll) + my,
+                     min(stats[i, cv2.CC_STAT_LEFT] for i in ll),
+                     max(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]
+                         for i in ll),
+                     cfg.dev_logo_band_max_area_mult * med_letter_area)
+
     print(f"\n===== {tag} =====")
     print(f"ROI bbox: x[{x_left},{x_right}] y[{y_top},{y_bot}]  h={roi_h} w={roi_w}")
     print(f"thr={thr:.2f} (mean={vals.mean():.2f} std={vals.std():.2f})  "
@@ -130,6 +146,12 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
         extent = area / float(bw * bh) if bw * bh > 0 else 0.0
         aspect = bw / float(bh) if bh > 0 else 0.0
         is_logo = li in logo_labels
+        if (logo_band is not None and area <= logo_band[4]
+                and logo_band[0] <= cents[li][1] <= logo_band[1]
+                and logo_band[2] <= cents[li][0] <= logo_band[3]):
+            print(f"   comp {li:3d}: area={area:5d} cy={cents[li][1]:6.1f} "
+                  f"cx={cents[li][0]:6.1f}  rej:logo_band")
+            continue
         if aspect < cfg.dev_aspect_lo:
             verdict = "rej:aspect_lo"
         else:
@@ -176,7 +198,7 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("stem")
-    ap.add_argument("--roi", default="both", choices=["sam", "yolo", "both"])
+    ap.add_argument("--roi", default="yolo", choices=["sam", "yolo", "both"])
     args = ap.parse_args()
 
     imgs = sorted(Path("data/images").rglob("*.jpg"))

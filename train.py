@@ -6,6 +6,12 @@ Prereqs:
     - Base checkpoint present: yolo11n-seg.pt (download if missing)
 
 Each run saves to runs/smoothie-seg/<name>/weights/{best,last}.pt
+
+After training, evaluate then PROMOTE the weights into the live pipeline:
+    python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/<name>/weights/best.pt
+    cp runs/smoothie-seg/<name>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
+    rm -rf outputs/roi_cache_yolo && python scripts/cache_yolo_rois.py
+    python scripts/validate_chunks.py      # re-validate all 92 before trusting it
 """
 from __future__ import annotations
 
@@ -15,7 +21,7 @@ from ultralytics import YOLO
 
 DATA_YAML = Path("smoothie_dataset/exports/yolo_seg/data.yaml")
 BASE_MODEL = "yolo11n-seg.pt"   # nano; swap to yolo11s-seg.pt for more capacity
-RUN_NAME   = "nano-v3"          # bump each retrain
+RUN_NAME   = "nano-v4"          # bump each retrain (v3 = currently deployed)
 
 # MPS (Apple Silicon) segfaults with YOLO segmentation — always use CPU here.
 DEVICE = "cpu"
@@ -44,6 +50,8 @@ def main() -> None:
     print(f"\nmAP50 (mask):    {metrics.seg.map50:.4f}")
     print(f"mAP50-95 (mask): {metrics.seg.map:.4f}")
     print(f"Weights: runs/smoothie-seg/{RUN_NAME}/weights/best.pt")
+    print(f"To deploy: cp runs/smoothie-seg/{RUN_NAME}/weights/best.pt "
+          f"checkpoints/yolo_smoothie_seg.pt  (then re-cache ROIs + validate)")
 
 
 if __name__ == "__main__":

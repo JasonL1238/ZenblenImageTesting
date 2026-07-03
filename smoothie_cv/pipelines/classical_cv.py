@@ -259,6 +259,24 @@ class ClassicalCVPipeline(BlendPipeline):
         n, labels, stats, cents = cv2.connectedComponentsWithStats(clean, connectivity=8)
         logo_labels = self._logo_text_labels(stats, cents, n, roi_h, roi_w)
 
+        # logo band: the vertical/horizontal extent of the CONFIRMED wordmark, with
+        # a margin proportional to the letter height. Accepted components whose
+        # centroid lands inside this band are print footprint (a counter-shadow blob
+        # or a stray letter that didn't join the group), not chunks — rejected below.
+        # Only defined when a wordmark was actually confirmed → never fires otherwise.
+        logo_band = None
+        if cfg.dev_logo_band_suppress and logo_labels:
+            ll = list(logo_labels)
+            tops = [stats[i, cv2.CC_STAT_TOP] for i in ll]
+            bots = [stats[i, cv2.CC_STAT_TOP] + stats[i, cv2.CC_STAT_HEIGHT] for i in ll]
+            lefts = [stats[i, cv2.CC_STAT_LEFT] for i in ll]
+            rights = [stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH] for i in ll]
+            my = cfg.dev_logo_band_margin_frac * float(
+                np.median([stats[i, cv2.CC_STAT_HEIGHT] for i in ll]))
+            med_letter_area = float(np.median([stats[i, cv2.CC_STAT_AREA] for i in ll]))
+            logo_band = (min(tops) - my, max(bots) + my, min(lefts), max(rights),
+                         cfg.dev_logo_band_max_area_mult * med_letter_area)
+
         # per-pixel deviation vector from local base (for directional growth below)
         dev = lab - base
 
@@ -279,6 +297,15 @@ class ClassicalCVPipeline(BlendPipeline):
             if lab_i in logo_labels:
                 continue
             area = int(stats[lab_i, cv2.CC_STAT_AREA])
+            # confirmed-wordmark band suppression (see logo_band above): a
+            # letter-sized component whose centroid lands inside the wordmark band
+            # is print footprint, not a chunk. Larger masses that merely overlap the
+            # band are real chunks and are spared by the area ceiling.
+            if logo_band is not None and area <= logo_band[4]:
+                cy_i, cx_i = cents[lab_i][1], cents[lab_i][0]
+                if (logo_band[0] <= cy_i <= logo_band[1]
+                        and logo_band[2] <= cx_i <= logo_band[3]):
+                    continue
             # area ceiling is common; the floor differs by path (colour-cued paths
             # accept smaller flecks), so only reject on the ceiling / relaxed floor here.
             if area < cfg.dev_relaxed_min_area or area > roi_area * cfg.dev_max_area_frac:
@@ -482,11 +509,22 @@ class ClassicalCVPipeline(BlendPipeline):
                 ref_mean = ref_pixels.mean(axis=0)
                 dE_ref = np.sqrt(((lab - ref_mean) ** 2).sum(axis=2))
 
-                # chroma gate: unblended cream/neutral masses are less saturated than
-                # the coloured smoothie body.  Lighter-pink lower zones (natural
-                # gradient) keep the same hue, so their chroma stays close to the
-                # reference.  Require pixels to be ≥ dev_global_chroma_drop units
-                # LESS chromatic than the reference band mean.
+                # colour gate, TWO branches (union — one physical mass often has both):
+                # 1. NEUTRAL: unblended cream/neutral masses are less saturated than
+                #    the coloured smoothie body.  Lighter-pink lower zones (natural
+                #    gradient) keep the same hue, so their chroma stays close to the
+                #    reference.  Require pixels to be ≥ dev_global_chroma_drop units
+                #    LESS chromatic than the reference band mean.
+                # 2. HUE-SHIFTED: a saturated mass of a DIFFERENT colour family
+                #    (yellow banana/mango on a red smoothie, 50e294) keeps chroma
+                #    similar to the body — the neutral branch never sees it — but
+                #    sits far from the reference in ab-plane ANGLE. Natural bottom
+                #    gradients lighten/darken WITHIN the body's hue family (small
+                #    angle), so a large hue swing is a real colour jump. The chroma
+                #    floor excludes near-neutral pixels whose hue is numerically
+                #    unstable (glare, shadow). Measured on the 92-set: only genuine
+                #    bottom masses (50e294, 749a) produce a bottom-attached hue
+                #    component anywhere in θ 25–50°; every clean cup produces none.
                 A_ch = lab[:, :, 1]
                 B_ch = lab[:, :, 2]
                 chroma_px = np.sqrt((A_ch - 128.0) ** 2 + (B_ch - 128.0) ** 2)
@@ -494,10 +532,20 @@ class ClassicalCVPipeline(BlendPipeline):
                                           + (ref_mean[2] - 128.0) ** 2))
                 neutral_vs_ref = (ref_chroma - chroma_px) >= cfg.dev_global_chroma_drop
 
+                ref_hue = np.degrees(np.arctan2(ref_mean[2] - 128.0,
+                                                ref_mean[1] - 128.0))
+                hue_px = np.degrees(np.arctan2(B_ch - 128.0, A_ch - 128.0))
+                hue_diff = np.abs(hue_px - ref_hue)
+                hue_diff = np.minimum(hue_diff, 360.0 - hue_diff)
+                hue_vs_ref = ((hue_diff >= cfg.dev_global_hue_deg)
+                              & (chroma_px >= cfg.dev_global_hue_min_chroma))
+
+                colour_jump = neutral_vs_ref | hue_vs_ref
+
                 target_sel = mi.copy()
                 target_sel[:target_top_y, :] = False
                 global_raw = (target_sel & (dE_ref >= cfg.dev_global_thr)
-                              & neutral_vs_ref).astype(np.uint8) * 255
+                              & colour_jump).astype(np.uint8) * 255
                 global_raw[:foam_cut, :] = 0
 
                 k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
@@ -511,7 +559,7 @@ class ClassicalCVPipeline(BlendPipeline):
                 # boundary artifact, so growing into the un-eroded ROI is sound; the
                 # L floor keeps the dark gasket edge from joining the mass.
                 cream_field = ((roi_mask > 0) & (dE_ref >= cfg.dev_global_thr)
-                               & neutral_vs_ref
+                               & colour_jump
                                & (lab[:, :, 0] >= cfg.dev_botband_L_lo))
                 cream_field[:max(target_top_y, foam_cut), :] = False
                 cream_field_u8 = cream_field.astype(np.uint8) * 255
@@ -527,7 +575,7 @@ class ClassicalCVPipeline(BlendPipeline):
                         comp = ((labels_g == li).astype(np.uint8)) * 255
                         out = cv2.bitwise_or(
                             out, self._reconstruct(comp, cream_field_u8,
-                                                   cfg.dev_grow_max_iter))
+                                                   cfg.dev_global_grow_max_iter))
 
         return out
 

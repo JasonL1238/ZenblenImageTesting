@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from smoothie_cv.config import Config
 from smoothie_cv.roi import crop_to_roi
 
-SAM_CACHE = Path("outputs/roi_cache")
-YOLO_CACHE = Path("outputs/roi_cache_yolo_v3")
+SAM_CACHE = Path("outputs/roi_cache_sam")
+YOLO_CACHE = Path("outputs/roi_cache_yolo")
 
 
 def trace(image, roi_mask, cfg, tag):
@@ -55,19 +55,29 @@ def trace(image, roi_mask, cfg, tag):
     chroma_px = np.sqrt((lab[:, :, 1] - 128.0) ** 2 + (lab[:, :, 2] - 128.0) ** 2)
     ref_chroma = float(np.sqrt((ref_mean[1] - 128.0) ** 2 + (ref_mean[2] - 128.0) ** 2))
     neutral = (ref_chroma - chroma_px) >= cfg.dev_global_chroma_drop
+    # hue branch (mirror of _deviation_mask): saturated but hue-shifted vs reference
+    ref_hue = np.degrees(np.arctan2(ref_mean[2] - 128.0, ref_mean[1] - 128.0))
+    hue_px = np.degrees(np.arctan2(lab[:, :, 2] - 128.0, lab[:, :, 1] - 128.0))
+    hue_diff = np.abs(hue_px - ref_hue)
+    hue_diff = np.minimum(hue_diff, 360.0 - hue_diff)
+    hue_shift = (hue_diff >= cfg.dev_global_hue_deg) & (chroma_px >= cfg.dev_global_hue_min_chroma)
     target = mi.copy(); target[:target_top_y, :] = False
-    hits = target & (dE_ref >= cfg.dev_global_thr) & neutral
+    base = target & (dE_ref >= cfg.dev_global_thr)
+    hits = base & (neutral | hue_shift)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(
         hits.astype(np.uint8) * 255, connectivity=8)
     big = [int(stats[i, cv2.CC_STAT_AREA]) for i in range(1, n)
            if stats[i, cv2.CC_STAT_AREA] >= cfg.dev_global_min_area]
-    print(f"[{tag}] REFBAND: ref_chroma={ref_chroma:.1f} target_px={int(target.sum())} "
-          f"hit_px={int(hits.sum())} big_comps(>= {cfg.dev_global_min_area}px)={big}")
+    print(f"[{tag}] REFBAND: ref_chroma={ref_chroma:.1f} ref_hue={float(ref_hue):.1f} "
+          f"target_px={int(target.sum())} "
+          f"hit_px={int(hits.sum())} (neutral={int((base & neutral).sum())} "
+          f"hue={int((base & hue_shift).sum())}) "
+          f"big_comps(>= {cfg.dev_global_min_area}px)={big}")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stem"); ap.add_argument("--roi", default="both")
+    ap.add_argument("stem"); ap.add_argument("--roi", default="yolo")
     args = ap.parse_args()
     match = [p for p in sorted(Path("data/images").rglob("*.jpg")) if args.stem in p.stem]
     p = match[0]; img = cv2.imread(str(p)); cfg = Config()

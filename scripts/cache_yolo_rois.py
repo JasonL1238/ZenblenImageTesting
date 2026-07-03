@@ -1,10 +1,12 @@
 """Cache YOLO-seg container ROI masks so chunk-detector tuning is fast + deterministic.
 
-Writes <cache>/<stem>.png (uint8 ROI mask, 0/255) for each image under data/images/.
+Writes <out>/<stem>.png (uint8 ROI mask, 0/255) for each image under data/images/.
+Re-run after promoting new weights (delete the cache dir first — existing masks
+are skipped, not refreshed).
 
 Usage:
   /opt/miniconda3/bin/python scripts/cache_yolo_rois.py
-  /opt/miniconda3/bin/python scripts/cache_yolo_rois.py --weights runs/smoothie-seg/nano-v3/weights/best.pt --tag v3
+  /opt/miniconda3/bin/python scripts/cache_yolo_rois.py --weights runs/smoothie-seg/nano-v4/weights/best.pt --out outputs/roi_cache_yolo_v4
 """
 from __future__ import annotations
 
@@ -13,20 +15,19 @@ import sys
 from pathlib import Path
 
 import cv2
-import numpy as np
 from ultralytics import YOLO
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.validate_chunks_yolo import get_yolo_roi
+from smoothie_cv.detection.yolo import get_yolo_roi
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", default="runs/smoothie-seg/nano-v3/weights/best.pt")
-    ap.add_argument("--tag", default="v3")
+    ap.add_argument("--weights", default="checkpoints/yolo_smoothie_seg.pt")
+    ap.add_argument("--out", default="outputs/roi_cache_yolo")
     args = ap.parse_args()
 
-    cache = Path(f"outputs/roi_cache_yolo_{args.tag}")
+    cache = Path(args.out)
     cache.mkdir(parents=True, exist_ok=True)
     model = YOLO(args.weights)
     imgs = sorted(Path("data/images").rglob("*.jpg"))

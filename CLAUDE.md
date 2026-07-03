@@ -7,22 +7,38 @@
 - Batch:            `python run.py --pipeline classical --image data/images/ --threshold 0.90`
 
 Classical is the only analysis pipeline; the VLM and SAM *analysis* pipelines
-were removed. SAM2 remains the priority CONTAINER detector (see below).
+were removed. A fine-tuned YOLO-seg model is the priority CONTAINER detector;
+SAM2 is phased out of the pipeline but kept as the training-free reference.
 
 # Container detection (ROI)
-- SAM2 is the PRIORITY detector; classical colour-thresholding is the FALLBACK.
-  SAM is colour-agnostic and robust across shades; classical is fragile on tan/pale.
+- The fine-tuned YOLO11n-seg model is the PRIORITY detector (trained on our own
+  smoothie-only labels — foam excluded, reaches the true cup bottom, 6 MB nano
+  net). Classical colour-thresholding is the FALLBACK. SAM2 is LEGACY: kept in
+  the codebase (needs no training data → independent reference for evaluating
+  newly trained models, and the labeling tool's bootstrap segmenter) but NOT in
+  the default priority.
 - Single entry point: `from smoothie_cv.detection import detect_container`. It
-  dispatches in `config.detector_priority` order (default `["sam", "classical"]`),
+  dispatches in `config.detector_priority` order (default `["yolo", "classical"]`),
   falling back when a detector is unavailable or returns no plausible mask.
 - Module layout under `smoothie_cv/detection/`:
-  - `__init__.py`  → `detect_container()` dispatcher (SAM→classical) + public exports
-  - `sam.py`       → `detect_sam()`        — SAM2 fixed-prompt detector [PRIORITY]
+  - `__init__.py`  → `detect_container()` dispatcher (YOLO→classical) + public exports
+  - `yolo.py`      → `detect_yolo()`       — fine-tuned YOLO-seg [PRIORITY]; also
+                     `get_yolo_roi()` + `fill_holes()` used by the scripts
   - `classical.py` → `detect_classical()`  — colour-threshold + flatten [FALLBACK]
+  - `sam.py`       → `detect_sam()`        — SAM2 fixed-prompt detector [LEGACY]
   - `common.py`    → shared helpers (classify, `flatten_roi_top`, `top_edge_roughness`, overlay)
-- Force one: `detect_container(img, prefer="classical")`, or `run.py --detector sam|classical`
+- Force one: `detect_container(img, prefer="sam")`, or `run.py --detector yolo|sam|classical`
   (default `auto` = priority order).
-- Compare methods head-to-head: `python scripts/compare_detectors.py [--sample]`.
+- Deployed weights: `checkpoints/yolo_smoothie_seg.pt` (`config.yolo_weights`).
+  Train → deploy loop (see train.py docstring):
+  1. label in `labeling/`, export via `python dataset_pipeline.py export-all`
+  2. `/opt/miniconda3/bin/python train.py` (bump RUN_NAME first)
+  3. sanity-check masks vs the SAM reference:
+     `python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/<run>/weights/best.pt`
+  4. `cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt`
+  5. `rm -rf outputs/roi_cache_yolo && python scripts/cache_yolo_rois.py`
+  6. `python scripts/validate_chunks.py` — MUST re-validate all 92 (ROI changes
+     shift the adaptive chunk threshold and flip verdicts).
 
 # Unblended-chunk detection (inside ROI)
 - After container detection, `ClassicalCVPipeline` finds unblended chunks inside
@@ -36,6 +52,24 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   separates them. Handled by `_logo_text_labels()`: the logo is a horizontal ROW of
   similar-height marks spanning a wide extent; a chunk is a lone compact blob. Logo
   components are detected from the SAME ΔE map that fires the FP, then excluded.
+- CONFIRMED-WORDMARK BAND SUPPRESSION (`dev_logo_band_suppress`, added 2026-07 from
+  the 500-image labeling-disjoint eval): once `_logo_text_labels()` CONFIRMS a
+  wordmark, reject any OTHER accepted component whose centroid lands inside that
+  wordmark's bounding band (± `dev_logo_band_margin_frac`·median-letter-height) AND
+  whose area ≤ `dev_logo_band_max_area_mult`·median-letter-area. Fixes the leak where
+  a counter-shadow blob or a stray letter that did NOT join the group rides alongside
+  the confirmed letters — colour-identical to a chunk (dark+saturated), so ONLY size +
+  position-in-a-confirmed-band separate them. The area ceiling is mandatory: a real
+  chunk overlapping the wordmark is a distinctly larger mass (measured: leaked ≤274px
+  vs real chunks 875/1752px in the same band — both real chunks kept). Conditional on a
+  confirmed wordmark → never fires on cups with no detected logo. Net: 92-set 32→31
+  (removed the c6f69e01 counter-shadow FP — a previously-uncaught logo FP, NOT a lost
+  chunk); 500-set eval −7 logo FPs, 0 real chunks lost, 0 new flags. LIMIT: does NOT
+  fix the CLIPPED-wordmark case (word partly out of frame / curved on the cup → <3
+  letters or span <`dev_text_min_span`, so the text-line detector never fires and there
+  is no confirmed band). That residual (~13 images on the 500-set) needs a trained YOLO
+  logo-mask class; measured that NO count/span relaxation catches them without also
+  grouping real 2-chunk clusters (the documented "no threshold separates them" wall).
 - TWO-PASS BASE: bright print pulls the pass-1 K=121 base UP around the letters, so
   ordinary smoothie between/inside them reads "darker than base" — the print's
   COUNTER-SHADOW (dark-path FP, e.g. the blob in the "n" counter on 28fe/560d).
@@ -125,8 +159,20 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   that reach the true cup bottom (YOLO-seg), large cream masses sit fully INSIDE the
   ROI where K=121 adapts to them (paths 1–3 blind) and Path 4's last-rows gate can
   sit on gasket pixels and miss. This pass compares the lower zone against a mid-cup
-  reference band (ΔE≥22 + chroma-drop≥12, additive — does NOT perturb the adaptive
-  threshold). Precision gates, each killing a distinct look-alike:
+  reference band (ΔE≥22 + a colour-jump gate, additive — does NOT perturb the
+  adaptive threshold). The colour-jump gate has TWO branches (union — one physical
+  mass often has both):
+    - NEUTRAL (chroma-drop≥12): cream/neutral masses desaturate vs the body.
+    - HUE (`dev_global_hue_deg`=35° + chroma≥12 floor): a saturated mass of a
+      different colour FAMILY (yellow banana on red, 50e294) keeps chroma similar
+      to the body — the neutral branch is BLIND to it (50e294's warm part measured
+      drop≈13, barely over the gate; Path 4 saw bot chroma 18.1 > its ≤11 cream
+      ceiling) — but swings the LAB ab-plane hue angle. Natural gradients lighten
+      within the body's hue family. Margin measured on the 92-set: only genuine
+      bottom masses (50e294, 749a) produce a bottom-attached hue component at ANY
+      θ in 25–50°; clean cups produce zero. The chroma floor excludes near-neutral
+      pixels whose hue is numerically unstable (glare/shadow).
+  Precision gates, each killing a distinct look-alike:
     - area ≥ 1500px (logo letters, glare specks)
     - BOTTOM ATTACHMENT `dev_global_bot_attach_frac`: cream is heavy and RESTS on
       the gasket; the diffuse backlit condensation glow floats mid-low cup detached
@@ -135,8 +181,13 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
     - accepted components are geodesically reconstructed into the UN-eroded ROI
       (dE_ref has no masked-blur boundary artifact) with an L≥100 floor so the mass
       fills to the cup wall/gasket without grabbing the dark gasket edge.
-  Result: 749a/50e294 cream masses ~fully covered under YOLO ROIs (1940→5716px,
-  1439→3854px) instead of edge fragments.
+      Reconstruction uses its OWN bound `dev_global_grow_max_iter`=512, NOT the
+      shared dev_grow_max_iter=40 (that protects paths 1–3's looser field; a bottom
+      mass spans ~250px and 40px of reach left 2/3 of 50e294 uncovered). Safe by
+      construction: clean cups have no ≥1500px bottom-attached seed, so nothing grows.
+  Result: 749a/50e294 masses fully covered wall-to-wall under YOLO ROIs (50e294
+  3854→6172px incl. the warm-yellow lobe, 749a 5716→7738px); verdicts unchanged
+  (32 flagged, 0 flips).
 - YOLO ROI masks are HOLE-FILLED at the source (`get_yolo_roi`): a liquid mask is
   simply connected; the model punching holes over logo letters breaks the text-line
   logo exclusion (the word is no longer a row of marks inside the ROI → 28fe82f8).
@@ -156,15 +207,15 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
   clean ones. Zero margin; do not tune, fix optics. Also still missed: 0ad03494
   (documented mid-bottom cream, interleaved with clean cups) and dd4d2902 (frame
   unanalyzable: cup behind frost/condensation — capture QA issue, both ROIs poor).
-- Validate across the dataset: `python scripts/validate_chunks.py` (uses cached SAM
-  ROIs in `outputs/roi_cache/`; regenerate with `python scripts/cache_sam_rois.py`).
+- Validate across the dataset: `python scripts/validate_chunks.py` (uses cached
+  YOLO ROIs in `outputs/roi_cache_yolo/`; regenerate with
+  `python scripts/cache_yolo_rois.py`; `--live` runs the model instead; SAM
+  reference cache: `outputs/roi_cache_sam/` via `scripts/cache_sam_rois.py`).
   Writes a clean report to `outputs/report/`: `flagged.png` (flagged smoothies,
-  original vs detection side-by-side), `scores.csv`, `README.md`, `overlays/` (all 92).
-- YOLO-ROI validation: `python scripts/validate_chunks_yolo.py --roi-cache
-  outputs/roi_cache_yolo_v3` (cache with `scripts/cache_yolo_rois.py`; omit
-  --roi-cache to run the model live). Diffs verdicts vs the SAM baseline
-  (outputs/report/scores.csv). Compare any two runs: `scripts/diff_reports.py a b`.
-  Per-image gate tracing: `scripts/debug_chunk_paths.py <stem> [--roi sam|yolo]`
+  original vs detection side-by-side), `scores.csv`, `README.md`, `overlays/`
+  (all 92) — and diffs verdicts vs the previous report (`--baseline`), printing
+  new/lost flags. Compare any two runs: `scripts/diff_reports.py a b`.
+  Per-image gate tracing: `scripts/debug_chunk_paths.py <stem> [--roi yolo|sam|both]`
   (MUST be kept in sync with `_deviation_mask` — it replicates the logic).
 
 # Code style
@@ -179,10 +230,13 @@ were removed. SAM2 remains the priority CONTAINER detector (see below).
 - Use a subagent for image analysis and multi-file investigation to keep context lean.
 
 # Gotchas / environment
-- SAM2 container detection requires checkpoint files in `checkpoints/` — download separately:
+- YOLO container detection needs `checkpoints/yolo_smoothie_seg.pt` (gitignored —
+  retrain with `train.py` and promote best.pt, or copy from another machine).
+- SAM2 (legacy detector) requires checkpoint files in `checkpoints/` — download separately:
   `wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -P checkpoints/`
 - SAM2 is installed from source, not PyPI: see `requirements.txt` comments.
 - M4 Pro uses MPS backend (`torch.backends.mps`); Jetson Nano falls back to CPU — no CUDA.
+  YOLO-seg TRAINING segfaults on MPS — train.py forces CPU.
 - Pipelines implement the `BlendResult` contract (`smoothie_cv/pipelines/base.py`).
 
 # Session health (canary)

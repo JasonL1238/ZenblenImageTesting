@@ -166,11 +166,31 @@ class Config:
                                      # body itself (additive; area-gated ≥1500px; does not
                                      # perturb the adaptive per-image threshold).
     dev_global_thr: float = 22.0            # ΔE from reference band to flag a pixel
-    dev_global_chroma_drop: float = 12.0    # detected pixels must be ≥ this many chroma
-                                            # units LESS saturated than the reference band
-                                            # mean.  Keeps light-pink lower zones (natural
-                                            # smoothie gradient, still reddish) from firing;
-                                            # cream/neutral masses have chroma drop ≥ 20.
+    dev_global_chroma_drop: float = 12.0    # NEUTRAL branch: detected pixels must be ≥ this
+                                            # many chroma units LESS saturated than the
+                                            # reference band mean.  Keeps light-pink lower
+                                            # zones (natural smoothie gradient, still reddish)
+                                            # from firing; cream/neutral masses drop ≥ 20.
+    # HUE branch (OR'd with the neutral branch): a saturated mass of a different
+    # colour FAMILY (yellow on red, 50e294) keeps chroma similar to the body — the
+    # neutral branch is blind to it — but swings the LAB ab-plane hue angle hard.
+    # Natural gradients lighten within the body's hue family (small angle).
+    # Margin measured on the 92-set: only genuine bottom masses (50e294, 749a)
+    # produce a bottom-attached hue component at ANY θ in 25–50°; clean cups
+    # produce zero, and component size varies <25% across that whole range.
+    dev_global_hue_deg: float = 35.0        # min ab-plane hue-angle diff vs reference (°)
+    dev_global_hue_min_chroma: float = 12.0 # pixel chroma floor — hue is numerically
+                                            # unstable near neutral (glare/shadow px)
+    dev_global_grow_max_iter: int = 512     # Path 6 reconstruction bound. NOT the shared
+                                            # dev_grow_max_iter (=40): that bound protects
+                                            # the loose directional field of paths 1–3; a
+                                            # bottom mass spans the cup (~250px) and 40 px
+                                            # of geodesic reach left 2/3 of 50e294's mass
+                                            # uncovered. Path 6's field is already gated
+                                            # (ΔE≥22 + colour jump + L floor + lower zone)
+                                            # and only grows when a ≥1500px bottom-attached
+                                            # seed exists — clean cups have no seed, so a
+                                            # large bound cannot introduce churn.
     dev_global_min_area: int = 1500         # min connected-component area (px)
     dev_global_bot_attach_frac: float = 0.05  # a component must reach within this fraction
                                               # of ROI height of the ROI's LAST row. Unblended
@@ -273,7 +293,28 @@ class Config:
     dev_botband_chroma_hi: float = 12.0     # band median chroma ceiling (excludes chromatic smoothie)
     dev_botband_L_lo: float = 100.0         # band median L floor (excludes dark gasket shadow)
     dev_botband_L_hi: float = 145.0         # band median L ceiling (excludes blown specular glare)
-    # logo text-line detector: a row of similar-height marks spanning a wide extent
+    # logo-band suppression: once the text-line detector CONFIRMS a "zenblen"
+    # wordmark (≥dev_text_min_letters aligned marks over a wide span), reject any
+    # OTHER accepted component whose centroid falls inside that wordmark's
+    # bounding band (± a margin proportional to the letter height). Rationale:
+    # partial/curved framing leaves a counter-shadow blob or a stray letter that
+    # did NOT join the group riding right alongside the confirmed letters — it is
+    # part of the print footprint, not a chunk. This is CONDITIONAL on a confirmed
+    # wordmark (never fires without one), so it cannot touch cups that have no
+    # detected logo. It does NOT recover the "clipped wordmark" case where the
+    # text-line detector never fires (<3 letters / span <dev_text_min_span) — that
+    # needs a trained logo mask, not a classical rule.
+    # A band component is only suppressed if it is LETTER-SIZED (area ≤ this
+    # multiple of the confirmed wordmark's median letter area). The leaked print
+    # blobs (counter-shadows / stray letters) measure ≤ a letter; a real chunk that
+    # happens to overlap the wordmark band is a distinctly LARGER mass (measured:
+    # leaked ≤274px vs real chunks 875/1752px at the same band). Size is the only
+    # separator — the leaked blobs are dark+saturated, colour-identical to chunks.
+    dev_logo_band_suppress: bool = True
+    dev_logo_band_margin_frac: float = 0.5   # vertical margin above/below the band as
+                                             # a fraction of the median letter height
+    dev_logo_band_max_area_mult: float = 1.3  # suppress a band component only if its
+                                              # area ≤ this × median letter area
     dev_letter_min_area: int = 60      # min component area to be a letter candidate
     dev_letter_h_lo: float = 0.025     # letter height range as fraction of ROI height
     dev_letter_h_hi: float = 0.20
@@ -303,12 +344,20 @@ class Config:
     yellow_chroma_min: float = 6.0
 
     # --- container detection (ROI) ---
-    # Order detectors are tried in. SAM2 is the priority detector (colour-agnostic,
-    # robust across shades); classical colour-thresholding is the fallback, used
-    # only when SAM is unavailable or returns no plausible mask.
-    detector_priority: list[str] = field(default_factory=lambda: ["sam", "classical"])
+    # Order detectors are tried in. The fine-tuned YOLO-seg model is the priority
+    # detector (trained on our own smoothie-only labels, reaches the true cup
+    # bottom); classical colour-thresholding is the fallback, used only when YOLO
+    # is unavailable or returns no plausible mask. SAM2 is registered but phased
+    # out of the default order — force with prefer="sam" / --detector sam.
+    detector_priority: list[str] = field(default_factory=lambda: ["yolo", "classical"])
 
-    # --- SAM2 (container detection) ---
+    # --- YOLO-seg (container detection, PRIORITY) ---
+    # Deployed weights. After retraining (train.py), promote the new run:
+    #   cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
+    yolo_weights: Path = field(
+        default_factory=lambda: Path("checkpoints/yolo_smoothie_seg.pt"))
+
+    # --- SAM2 (container detection, LEGACY/reference) ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
     # Top-edge prior policy. The RAW SAM mask is the primary output; the
     # straight-line top prior (flatten_roi_top) is applied ONLY when the raw

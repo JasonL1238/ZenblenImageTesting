@@ -77,7 +77,7 @@ def run_single(
     )
     smoothie_type = _classify_smoothie(image)
 
-    # ROI detection via the SAM-priority / classical-fallback dispatcher.
+    # ROI detection via the YOLO-priority / classical-fallback dispatcher.
     # `detector` (None = auto priority) maps to the dispatcher's `prefer`.
     roi_mask, _bbox, det = detect_container(
         image, config, prefer=detector, yellow_params=yellow_params, return_meta=True
@@ -262,9 +262,11 @@ def main() -> None:
                         help="Path to config.yaml (optional)")
     parser.add_argument("--output-dir", default=None,
                         help="Directory to write outputs (default: outputs/)")
-    parser.add_argument("--detector", choices=["auto", "sam", "classical"], default="auto",
-                        help="ROI detector. 'auto' = SAM priority, classical fallback "
-                             "(default). 'sam'/'classical' force one.")
+    parser.add_argument("--detector", choices=["auto", "yolo", "sam", "classical"],
+                        default="auto",
+                        help="ROI detector. 'auto' = YOLO priority, classical fallback "
+                             "(default). 'yolo'/'sam'/'classical' force one "
+                             "(sam is legacy/reference).")
     args = parser.parse_args()
 
     config = Config.load(args.config)

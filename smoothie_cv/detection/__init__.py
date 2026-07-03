@@ -2,13 +2,21 @@
 Container detection — public API.
 
 Two active detectors, in priority order:
-  SAM2      fixed-prompt, colour-agnostic, robust across all shades  [PRIORITY]
+  YOLO      fine-tuned YOLO11n-seg, smoothie-only masks               [PRIORITY]
   Classical colour-threshold + flatten_roi_top                        [FALLBACK]
 
 Layout:
   common.py     shared helpers (types, classify, geometry)
-  sam.py        SAM2 fixed-prompt detector    — detect_sam()         [PRIORITY]
-  classical.py  colour-threshold detector     — detect_classical()   [FALLBACK]
+  yolo.py       fine-tuned YOLO-seg detector  — detect_yolo()         [PRIORITY]
+  classical.py  colour-threshold detector     — detect_classical()    [FALLBACK]
+  sam.py        SAM2 fixed-prompt detector    — detect_sam()          [LEGACY]
+
+SAM2 was the priority detector before the fine-tuned YOLO model existed. It is
+PHASED OUT of the default pipeline (like the VLM/SAM analysis pipelines before
+it) but kept as a registered detector: it needs no training data, so it is
+still useful as an independent reference when evaluating a newly trained YOLO
+model (scripts/compare_yolo_vs_sam.py) and as a bootstrap labeler
+(labeling/run_sam.py). Force it with ``prefer="sam"`` / ``run.py --detector sam``.
 
 Callers should use ``detect_container`` and let the dispatcher choose; pass
 ``prefer=`` to force one (e.g. ``prefer="classical"`` for a fast, torch-free path).
@@ -31,8 +39,9 @@ from smoothie_cv.detection.common import (
     top_edge_roughness,
 )
 
-# Order in which detectors are tried. SAM first, classical as the fallback.
-DETECTOR_PRIORITY = ["sam", "classical"]
+# Order in which detectors are tried. YOLO first, classical as the fallback.
+# SAM is registered but not in the default order — force with prefer="sam".
+DETECTOR_PRIORITY = ["yolo", "classical"]
 
 __all__ = [
     "detect_container",
@@ -46,6 +55,19 @@ __all__ = [
     "BBox",
     "DETECTORS",
 ]
+
+
+def _adapt_yolo(
+    image: np.ndarray,
+    config: Config,
+    *,
+    yellow_params: YellowRefineParams | None = None,
+    flatten_top: bool | None = None,
+) -> tuple[np.ndarray, BBox | None]:
+    from smoothie_cv.detection.yolo import detect_yolo  # lazy: skip ultralytics import
+    # No flatten prior: the model is trained on smoothie-only masks (foam
+    # excluded), so its raw top edge IS the labeled surface geometry.
+    return detect_yolo(image, config)
 
 
 def _adapt_sam(
@@ -74,8 +96,9 @@ def _adapt_classical(
 
 # ── Detector registry ─────────────────────────────────────────────────────────
 DETECTORS: dict[str, Callable] = {
-    "sam":       _adapt_sam,
+    "yolo":      _adapt_yolo,
     "classical": _adapt_classical,
+    "sam":       _adapt_sam,   # legacy/reference — not in the default priority
 }
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -110,23 +133,25 @@ def detect_container(
     flatten_top: bool | None = None,
     return_meta: bool = False,
 ):
-    """Detect the smoothie ROI. **SAM2 is the priority detector; classical is the fallback.**
+    """Detect the smoothie ROI. **YOLO-seg is the priority detector; classical is the fallback.**
 
     Tries each detector in priority order and returns the first plausible mask.
-    A detector that is unavailable (e.g. SAM2 not installed / checkpoint missing)
-    or that raises / returns an implausible mask is skipped and the next one runs.
+    A detector that is unavailable (e.g. YOLO weights missing / ultralytics not
+    installed) or that raises / returns an implausible mask is skipped and the
+    next one runs.
 
     Args:
         image:        BGR image (H x W x 3, uint8).
-        config:       Config (SAM model, detector_priority). Defaults to Config().
-        prefer:       Override the order. A single name ("sam"/"classical") or an
-                      explicit list. Defaults to ``config.detector_priority``.
+        config:       Config (YOLO weights, detector_priority). Defaults to Config().
+        prefer:       Override the order. A single name ("yolo"/"sam"/"classical")
+                      or an explicit list. Defaults to ``config.detector_priority``.
         yellow_params: Tuning knobs forwarded to the classical detector.
-        flatten_top:  Top-edge prior policy (raw mask is primary). ``None``
-                      (default) = AUTO: flatten only a too-jagged top — SAM gates
-                      on ``config.sam_top_roughness_max``, classical on its own
-                      yellow+squiggle rule. ``True``/``False`` force the prior
-                      on/off for both detectors.
+        flatten_top:  Top-edge prior policy (raw mask is primary). Ignored by
+                      YOLO (trained on smoothie-only masks, its top edge is the
+                      labeled surface). ``None`` (default) = AUTO for the others:
+                      flatten only a too-jagged top — SAM gates on
+                      ``config.sam_top_roughness_max``, classical on its own
+                      yellow+squiggle rule. ``True``/``False`` force the prior.
         return_meta:  If True, also return a dict
                       ``{"detector", "fallback", "roughness"}``.
 
