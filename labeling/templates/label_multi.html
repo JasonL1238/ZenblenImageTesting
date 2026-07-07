@@ -1,0 +1,119 @@
+<meta charset="utf-8">
+<title>Multi-mode labeling</title>
+<style>
+  /* Per-mode theme: JS sets <html data-mode="..."> and everything recolors off
+     --mode-* so the active pipeline is unmistakable (banner + canvas frame). */
+  :root { --bg:#14161a; --panel:#1e2127; --fg:#e6e8eb; --muted:#8b94a3;
+          --mode:#39c07a; --mode-dim:rgba(57,192,122,.18); }
+  :root[data-mode="standard"] { --mode:#39c07a; --mode-dim:rgba(57,192,122,.18); }
+  :root[data-mode="spill"]    { --mode:#e8833a; --mode-dim:rgba(232,131,58,.20); }
+  :root[data-mode="logo"]     { --mode:#a06cd5; --mode-dim:rgba(160,108,213,.20); }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.4 system-ui, sans-serif; }
+
+  /* High-visibility mode banner — full width, solid mode color. */
+  #banner { display:flex; align-items:center; gap:14px; padding:8px 16px;
+            background:var(--mode); color:#0d0f12; font-weight:700;
+            letter-spacing:.03em; }
+  #banner .dataset { font-weight:600; opacity:.8; }
+  #banner .spacer { flex:1; }
+  #banner #fileid { font-weight:600; opacity:.85; }
+
+  /* Mode switch bar. */
+  #modebar { display:flex; align-items:center; gap:8px; padding:8px 16px;
+             background:var(--panel); border-bottom:1px solid #2a2e36; }
+  .modebtn { padding:5px 12px; border-radius:8px; border:1px solid #3a3f49;
+             background:#2a2e36; color:var(--muted); cursor:pointer;
+             font-size:13px; font-weight:600; }
+  .modebtn[data-m="standard"].active { background:#39c07a; color:#0d0f12; border-color:#39c07a; }
+  .modebtn[data-m="spill"].active    { background:#e8833a; color:#0d0f12; border-color:#e8833a; }
+  .modebtn[data-m="logo"].active     { background:#a06cd5; color:#0d0f12; border-color:#a06cd5; }
+  #layercount { color:var(--muted); font-size:12px; }
+  #layercount b { color:var(--mode); }
+
+  main { display:flex; height:calc(100vh - 41px - 41px); }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center;
+           overflow:hidden; position:relative; background:#0f1013; }
+  /* 6px mode-color frame around the canvas — peripheral-vision mode cue. */
+  #frame { border:6px solid var(--mode); max-width:100%; max-height:100%;
+           display:flex; box-shadow:0 0 0 1px #000; }
+  canvas { display:block; max-width:100%; max-height:calc(100vh - 120px);
+           cursor:crosshair; touch-action:none; }
+
+  aside { width:280px; padding:16px; background:var(--panel);
+          border-left:1px solid #2a2e36; overflow:auto; }
+  aside h2 { font-size:12px; text-transform:uppercase; color:var(--muted);
+             letter-spacing:.05em; margin:18px 0 6px; }
+  .btn { display:block; width:100%; text-align:left; padding:9px 12px; margin:6px 0;
+         border-radius:8px; border:1px solid #3a3f49; background:#2a2e36;
+         color:var(--fg); cursor:pointer; font-size:13px; font-weight:600; }
+  .btn.primary { background:var(--mode); color:#0d0f12; border-color:var(--mode); }
+  .btn.clean   { background:var(--mode-dim); border-color:var(--mode); color:var(--mode); }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn .k { float:right; opacity:.7; font-family:ui-monospace,monospace; }
+  .key { display:inline-block; min-width:20px; text-align:center; padding:1px 6px;
+         background:#2a2e36; border-radius:4px; border:1px solid #3a3f49;
+         font-family:ui-monospace,monospace; font-size:12px; }
+  ul { list-style:none; padding:0; margin:0; }
+  li { margin:6px 0; color:var(--muted); }
+  #warn { display:none; margin:8px 0; padding:8px 10px; border-radius:6px;
+          background:rgba(224,82,74,.15); color:#e0524a; font-size:12px; }
+  #counts { color:var(--muted); font-size:12px; line-height:1.9; }
+  #counts b { color:var(--fg); }
+  #done { display:none; text-align:center; color:var(--muted); font-size:16px; }
+</style>
+
+<div id="banner">
+  <span id="modename">MODE 2 · SPILLED SMOOTHIE</span>
+  <span class="dataset" id="dataset">→ spill_dataset</span>
+  <span class="spacer"></span>
+  <span id="fileid"></span>
+</div>
+
+<div id="modebar">
+  <span style="color:var(--muted);font-size:12px;margin-right:4px">Pipeline:</span>
+  <button class="modebtn" data-m="standard">1 · Standard</button>
+  <button class="modebtn" data-m="spill">2 · Spill</button>
+  <button class="modebtn" data-m="logo">3 · Logo</button>
+  <span class="spacer" style="flex:1"></span>
+  <span id="layercount"></span>
+</div>
+
+<main>
+  <div id="stage">
+    <div id="frame"><canvas id="c"></canvas></div>
+    <div id="done">🎉 nothing left to label in this mode.</div>
+  </div>
+  <aside>
+    <h2>This image</h2>
+    <button class="btn primary" id="btnSave">Save shapes → next<span class="k">↵</span></button>
+    <button class="btn clean"   id="btnClean">Mark Clean (no anomaly)<span class="k">K</span></button>
+    <button class="btn"         id="btnSkip">Skip (no save)<span class="k">S</span></button>
+    <button class="btn"         id="btnNew">New shape<span class="k">N</span></button>
+    <div id="warn"></div>
+
+    <h2>Draw</h2>
+    <ul>
+      <li>click empty area — drop a point</li>
+      <li>drag a vertex — move it</li>
+      <li>click an edge — insert a vertex</li>
+      <li>right-click a vertex — remove it</li>
+      <li><span class="key">N</span> finish shape, start another</li>
+      <li><span class="key">X</span> clear the active shape</li>
+      <li><span class="key">Z</span> undo</li>
+    </ul>
+
+    <h2>Modes</h2>
+    <ul>
+      <li><span class="key">1</span>/<span class="key">2</span>/<span class="key">3</span> switch pipeline (keeps image)</li>
+      <li><span class="key">←</span>/<span class="key">→</span> prev / next (no save)</li>
+    </ul>
+
+    <h2>Progress</h2>
+    <div id="counts"></div>
+  </aside>
+</main>
+
+<script src="/static/label_multi.js"></script>

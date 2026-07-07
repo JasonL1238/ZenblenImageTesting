@@ -160,6 +160,11 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
+    print("\n  [DEPRECATED] This is the OLD single-mode container labeler.\n"
+          "  Labeling is now unified in app_multi.py (standard/spill/logo).\n"
+          "  Its `labels` writes here are NO LONGER the source of truth — the\n"
+          "  new tool reads migrated annotations from the `annotations` table.\n"
+          "  Use:  python labeling/app_multi.py   (http://127.0.0.1:5001)\n")
     db.ensure_dirs()
     db.connect().close()  # create schema up front
     app.run(host=args.host, port=args.port, debug=args.debug)

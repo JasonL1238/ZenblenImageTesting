@@ -24,6 +24,23 @@ DATASET_DIR = ROOT / "dataset"
 
 VERDICTS = ("good", "corrected", "bad", "skip")
 
+# --- multi-mode labeler (app_multi.py) --------------------------------------
+# A SECOND, self-contained pipeline that shares this DB's image registry but
+# writes ONLY to the additive `annotations` / `mode_status` tables below — the
+# `labels` table above (the container/standard container-detection dataset) is
+# never touched. Each mode is an INDEPENDENT segmentation pass over the same
+# image pool and exports to its OWN single-class dataset (see export_multi.py):
+#   standard -> smoothie inside the cup   -> class 0: smoothie
+#   spill    -> smoothie outside the cup  -> class 0: spill
+#   logo     -> the zenblen logo/wordmark -> class 0: logo
+# One image labeled in all three modes yields three SEPARATE image+label pairs,
+# one per dataset — never a single file with mixed-class labels.
+MODES = ("standard", "spill", "logo")
+MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo"}
+# Persisted statuses. "skip" is deliberately NOT stored (Skip = advance without
+# writing state, so the image stays undecided and reappears later).
+MODE_STATUSES = ("labeled", "clean")
+
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open the labeling DB, creating the schema on first use.
@@ -57,6 +74,29 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             verdict    TEXT NOT NULL,
             polygon    TEXT,               -- JSON list of [x, y] pixel points
             labeled_at TEXT NOT NULL
+        );
+
+        -- Multi-mode labeler (app_multi.py). Additive; the tables above are
+        -- untouched. `annotations` is multi-instance: one row per polygon, so
+        -- an image can hold several same-class shapes for a given mode.
+        CREATE TABLE IF NOT EXISTS annotations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id    INTEGER NOT NULL REFERENCES files(file_id),
+            mode       TEXT NOT NULL,      -- one of db.MODES
+            polygon    TEXT NOT NULL,      -- JSON list of [x, y] pixel points
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_annotations_file_mode
+            ON annotations(file_id, mode);
+
+        -- One decision per (image, mode). status is one of db.MODE_STATUSES.
+        -- No row for a (file, mode) means "undecided" -> served again as next.
+        CREATE TABLE IF NOT EXISTS mode_status (
+            file_id    INTEGER NOT NULL REFERENCES files(file_id),
+            mode       TEXT NOT NULL,
+            status     TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (file_id, mode)
         );
         """
     )

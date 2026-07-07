@@ -19,6 +19,11 @@ labeling/dataset/
 labeling/labels.db
 labeling/labels.db-*
 
+# Multi-mode labeler (app_multi.py) per-mode exports — code committed, data not.
+labeling/spill_dataset/
+labeling/logo_dataset/
+labeling/smoothie_dataset_std/
+
 # Dataset pipeline output (master annotations, generated masks, exports) — the
 # CODE that builds these is committed; the generated data is not.
 smoothie_dataset/

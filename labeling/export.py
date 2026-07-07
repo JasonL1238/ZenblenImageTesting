@@ -87,6 +87,10 @@ def main() -> None:
                         help="Test fraction (default: 0.10)")
     args = parser.parse_args()
 
+    print("\n  [DEPRECATED] Old single-class export from the `labels` table.\n"
+          "  Standard annotations were migrated into the multi-mode tool; export\n"
+          "  the unified pipeline with:  python labeling/export_multi.py --mode standard\n")
+
     out = Path(args.out)
     for split in ("train", "val", "test"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
