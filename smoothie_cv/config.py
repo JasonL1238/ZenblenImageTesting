@@ -322,6 +322,32 @@ class Config:
     dev_text_min_span: float = 0.32    # min horizontal extent of the word (frac ROI width)
     dev_text_height_cv: float = 0.35   # max letter-height coeff. of variation (uniformity)
 
+    # TOP-CORNER logo suppression (added 2026-07 from the 500-image labeling-disjoint
+    # audit). The fixed rig prints the "zenblen" wordmark HIGH on the cup and it curves
+    # toward the vertical edges, so a CLIPPED wordmark (partly out of frame / wrapping
+    # around the cup → <3 visible letters or span <dev_text_min_span, which defeats the
+    # text-line detector AND EAST) leaves 1–2 letter fragments in the top-LEFT / top-RIGHT
+    # CORNERS of the ROI. Real chunks never sit above y_frac≈0.25 and cluster centrally
+    # (measured: real-chunk y_frac ≥ 0.249, median 0.52; logo FPs median 0.27), so a
+    # top-band + edge-proximity veto removes these fragments where no colour/size/stroke
+    # rule can (SWT/MSER/topology measured to fully overlap — the compact dark/chroma
+    # fragments are geometrically identical to small chunks). Complements — does NOT
+    # replace — dev_logo_band_suppress, which needs a CONFIRMED ≥3-letter wordmark this
+    # clipped case never produces. Applied only to a component that would otherwise be
+    # ACCEPTED, so it vetoes one detection and never touches the ROI (non-destructive).
+    # Audit result: catches 16/24 logo FPs (incl. 8/11 clipped-wordmark cases) at
+    # 0/147 real-chunk loss. LIMIT: the ~8 non-corner FPs (esp. compact dark/chroma
+    # letter fragments mid-frame) need a trained YOLO logo-mask class — not reachable
+    # by any classical rule.
+    dev_logo_corner_suppress: bool = True
+    dev_logo_corner_y_max: float = 0.30      # veto only if centroid y_frac ≤ this (top band)
+    dev_logo_corner_edge_max: float = 0.25   # AND min(x_frac,1-x_frac) ≤ this (near a
+                                             # vertical edge) — the top-corner zone
+    dev_logo_corner_compact_only: bool = False  # restrict veto to compact-path-only
+                                                # components (protects a top-corner chunk
+                                                # that also fires a colour path); measured
+                                                # unnecessary (0 loss without it)
+
     # edge-boundary detector (alternative)
     canny_lo: int = 20
     canny_hi: int = 60

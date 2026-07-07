@@ -381,6 +381,28 @@ class ClassicalCVPipeline(BlendPipeline):
             colour_cued = (dark or chromatic) and aspect <= cfg.dev_relaxed_aspect_hi
 
             if compact or colour_cued:
+                # top-corner logo suppression (see dev_logo_corner_* in config): a
+                # clipped-wordmark fragment that defeats the text-line detector lands
+                # in the top-left/top-right CORNER of the ROI, a zone real chunks avoid
+                # (they never sit above y_frac≈0.25 and cluster centrally). Veto an
+                # otherwise-accepted component whose centroid is in the top band AND
+                # near a vertical edge. Non-destructive: drops one detection only.
+                # ONLY when NO wordmark was confirmed (not logo_labels): with a
+                # confirmed wordmark the existing logo_band suppression already handles
+                # the letters via its area ceiling AND correctly spares a real dark
+                # chunk that happens to sit in the top corner (measured: 8343d981,
+                # ac4eac46 — dark high-solidity chunks in the top-left, position-
+                # identical to logo fragments, so ONLY the wordmark-confirmed gating
+                # separates them). The clipped case this rule targets always has an
+                # UNconfirmed wordmark (<3 letters / short span → logo_labels empty).
+                if (cfg.dev_logo_corner_suppress and not logo_labels and not (
+                        cfg.dev_logo_corner_compact_only and colour_cued)):
+                    cy_f = (cents[lab_i][1] - y_top) / roi_h
+                    cx_f = (cents[lab_i][0] - x_left) / roi_w
+                    edge_d = min(cx_f, 1.0 - cx_f)
+                    if (cy_f <= cfg.dev_logo_corner_y_max
+                            and edge_d <= cfg.dev_logo_corner_edge_max):
+                        continue
                 out[comp_mask] = 255
                 if area >= cfg.dev_grow_min_seed_area:
                     grow_seed_masks.append(comp_mask)
