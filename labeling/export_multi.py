@@ -67,7 +67,25 @@ def _image_size(path: Path) -> tuple[int, int] | None:
         return im.width, im.height
 
 
-def export_mode(mode: str, out: Path, val_frac: float, test_frac: float) -> None:
+def _model_approved_ids(conn, mode: str) -> set[int]:
+    """file_ids promoted into training by the review pipeline (app_review.py) —
+    i.e. review_status='approved' for this mode. Complete provenance for both
+    labeled and clean decisions (the annotations.source column carries the same
+    signal per-row for labeled shapes)."""
+    return {
+        r["file_id"]
+        for r in conn.execute(
+            "SELECT file_id FROM review_status WHERE mode = ? AND status = 'approved'",
+            (mode,),
+        )
+    }
+
+
+def export_mode(mode: str, out: Path, val_frac: float, test_frac: float,
+                source: str | None = None) -> None:
+    """Export one mode. ``source`` filters by provenance for ablation:
+    'hand' = exclude model-approved (pseudo-label) images; 'model' = only them;
+    None = all (default)."""
     class_name = db.MODE_CLASS_NAMES[mode]
     for split in ("train", "val", "test"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
@@ -78,7 +96,9 @@ def export_mode(mode: str, out: Path, val_frac: float, test_frac: float) -> None
         """
         SELECT m.file_id, m.status
         FROM mode_status m JOIN files f ON f.file_id = m.file_id
+        LEFT JOIN image_flags fl ON fl.file_id = m.file_id
         WHERE m.mode = ? AND m.status IN ('labeled', 'clean') AND f.downloaded = 1
+          AND fl.file_id IS NULL   -- never export no_smoothie / machinery shots
         ORDER BY m.file_id
         """,
         (mode,),
@@ -87,13 +107,24 @@ def export_mode(mode: str, out: Path, val_frac: float, test_frac: float) -> None
         print(f"[{mode}] no labeled/clean images — skipping")
         return
 
+    model_ids = _model_approved_ids(conn, mode) if source else set()
     items: list[tuple[int, str]] = []
+    dropped_src = 0
     for r in rows:
         fid = r["file_id"]
+        if source == "hand" and fid in model_ids:
+            dropped_src += 1
+            continue
+        if source == "model" and fid not in model_ids:
+            dropped_src += 1
+            continue
         if not (db.IMAGES_DIR / f"{fid}.jpg").exists():
             print(f"[{mode}] skip {fid}: image missing on disk")
             continue
         items.append((fid, r["status"]))
+    if source:
+        print(f"[{mode}] provenance filter '{source}': dropped {dropped_src}, "
+              f"kept {len(items)}")
     if not items:
         print(f"[{mode}] nothing exportable after validation")
         return
@@ -150,12 +181,19 @@ def main() -> None:
     parser.add_argument("--out", help="Override output dir (only with --mode)")
     parser.add_argument("--val", type=float, default=0.10)
     parser.add_argument("--test", type=float, default=0.10)
+    parser.add_argument(
+        "--source", choices=("hand", "model"), default=None,
+        help="provenance ablation: 'hand' excludes model-approved (pseudo-label) "
+        "images so you can retrain on hand labels only; 'model' keeps only "
+        "review-approved images; default keeps all. Compare the two on the "
+        "disjoint eval to confirm pseudo-labels help.",
+    )
     args = parser.parse_args()
 
     modes = [args.mode] if args.mode else list(db.MODES)
     for m in modes:
         out = Path(args.out) if (args.out and args.mode) else MODE_DIRS[m]
-        export_mode(m, out, args.val, args.test)
+        export_mode(m, out, args.val, args.test, source=args.source)
 
 
 if __name__ == "__main__":

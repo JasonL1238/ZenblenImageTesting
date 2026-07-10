@@ -1,82 +1,160 @@
-# SAM segmentation labeling tool
+# Labeling tools
 
-A mostly-standalone pipeline to build a **supervised container-segmentation
-dataset**. Pull production images from the Zenblen Files API, run SAM to get
-candidate masks, review/correct them in a local web UI, and export a labeled
-dataset. Reuses the existing detector (`smoothie_cv.detection.detect_container`)
-but is otherwise independent of the analysis pipeline.
+## Multi-mode labeler (current) — `app_multi.py`
 
-## Stages
+The from-scratch hand-labeling pipeline (see also the faster model-assisted
+**review** pipeline below, once a mode has a trained model). Three independent
+segmentation passes over the same image pool, each training its own single-class
+YOLO11n-seg model:
 
-```
-1. download.py  Files API  -> labeling/data/images/<file_id>.jpg   (+ files table)
-2. run_sam.py   SAM        -> data/masks_sam/*.png + data/polygons_sam/*.json
-3. app.py       Flask UI   -> accept / reject / correct  (verdicts in labels.db)
-4. export.py               -> labeling/dataset/ (images, masks, labels.csv, manifest.json)
-```
+| mode | key | segments | dataset | model weights |
+|------|-----|----------|---------|---------------|
+| standard | `1` | smoothie **inside** the cup | `labeling/smoothie_dataset_std/` | `checkpoints/yolo_standard_seg.pt` |
+| spill | `2` | smoothie **outside** the cup | `labeling/spill_dataset/` | `checkpoints/yolo_spill_seg.pt` |
+| logo | `3` | the zenblen logo/wordmark | `labeling/logo_dataset/` | `checkpoints/yolo_logo_seg.pt` |
 
-Stages are separate so the expensive SAM pass runs **once, offline**, and the UI
-just serves precomputed results — fast enough to label thousands.
+Each mode is strictly separate: one source image labeled in all three modes
+yields three separate image+label pairs, never a mixed-class file. The 200
+previous container labels were migrated into `standard` mode.
 
-## Setup
-
-```bash
-# Run ALL commands from the REPO ROOT (ZenblenImageTesting/), not from labeling/.
-# SAM resolves checkpoints/ relative to cwd, so running from the wrong directory
-# will produce a FileNotFoundError.
-
-pip install -r requirements.txt             # adds flask + requests
-# API key goes in .env at repo root (already git-ignored):
-echo "ZENBLEN_API_KEY=..." >> .env          # never commit the key
-```
-
-SAM (stage 2 only) needs the conda base env with torch + sam2 and a checkpoint in
-`checkpoints/` (see CLAUDE.md). Stages 1/3/4 do **not** need torch.
-
-## Usage
+**Label → export → train** (run from repo root):
 
 ```bash
-# All commands run from repo root:
+# 1. Label. Amber/violet/green banner shows the active mode. Switch with 1/2/3.
+python labeling/app_multi.py                       # http://127.0.0.1:5001
+#    click = drop points · N = new shape · Enter = save · K = mark clean · S = skip
+#    ← / → = prev / next; ← reaches ANY earlier image (even ones decided on a
+#            previous run) so you can always go back and re-edit — save replaces
+#            that image's shapes for the active mode.
+#    Optional: labeling/priority/<mode>.txt (one file_id per line) is served
+#    FIRST by /api/next — used to bump hard spill lookalikes to the front.
 
-# 1. Download every image/jpg in a time range (start with a NARROW range to test).
+# 2. Export the per-mode dataset (single class, clean images -> empty labels).
+python labeling/export_multi.py --mode spill       # or logo / standard / (omit = all)
+
+# 3. Train that mode's YOLO-nano (conda env — MPS segfaults, runs on CPU).
+/opt/miniconda3/bin/python train_multi.py --mode spill
+#    -> runs/spill-seg/spill-nano-v1/weights/best.pt   (bump --name each retrain)
+
+# 4. Deploy the weights (path printed at end of training).
+cp runs/spill-seg/spill-nano-v1/weights/best.pt checkpoints/yolo_spill_seg.pt
+```
+
+Data lives in the shared `labels.db` (additive `annotations` / `mode_status`
+tables). One-time merge of old labels already done via
+`migrate_labels_to_multi.py`.
+
+---
+
+## Model-assisted review — `predict_batch.py` + `app_review.py` (current)
+
+A SECOND, separate pipeline that is FASTER than drawing from scratch once a mode
+has a trained model. It runs the mode's YOLO-seg model over the raw images and
+lets a human **Approve / Reject / Edit** each prediction; approvals flow into the
+SAME training dataset the hand labeler feeds (via the unchanged `export_multi.py`).
+This is human-in-the-loop pseudo-labeling — the human is the quality gate, so the
+model's mistakes never silently become training labels.
+
+Predictions live in their OWN tables (`predictions`, `review_status`) and do NOT
+enter training until approved. Approval writes `annotations` (tagged
+`source='model'`) + `mode_status='labeled'`; a rejected image is left undecided so
+the hand labeler (`app_multi.py`) re-serves it (and it's pushed to
+`priority/<mode>.txt` so it jumps that queue).
+
+```bash
+# 0. Deploy the mode's weights (or pass --weights a run's best.pt below):
+cp runs/spill-seg/spill-nano-v1/weights/best.pt checkpoints/yolo_spill_seg.pt
+
+# 1. Stage predictions over the raw (undecided-for-this-mode) images.
+#    Conda python (needs ultralytics/torch); runs on CPU (MPS segfaults on seg).
+/opt/miniconda3/bin/python labeling/predict_batch.py --mode spill
+#    --weights runs/spill-seg/spill-nano-v1/weights/best.pt   # if not deployed
+#    --conf 0.25   --limit 50 (quick trial)
+#    Every processed image is staged 'pending' — including zero-detection ones,
+#    so the reviewer can also catch false-negatives.
+
+# 2. Review. Opens on the model prediction, pre-loaded as an editable polygon.
+python labeling/app_review.py --mode spill            # http://127.0.0.1:5002
+#    A = approve (as-is or after dragging vertices) -> into training
+#    R = reject  (wrong) -> back to the hand labeler
+#    K = clean   (no target here) -> empty negative sample
+#    N new shape · D delete shape · X clear · Z undo · ←/→ prev/next · S skip
+#    Queue is LOWEST-confidence-first by default (?sort=conf_asc) so you spend
+#    effort where the model is weakest; ?sort=file for file_id order.
+
+# 3. Export + train exactly as the hand pipeline (approved labels are included):
+python labeling/export_multi.py --mode spill
+/opt/miniconda3/bin/python train_multi.py --mode spill --name spill-nano-v2
+
+# Ablation — prove the pseudo-labels help, not hurt, on the disjoint eval:
+python labeling/export_multi.py --mode spill --source hand   # hand labels only
+python labeling/export_multi.py --mode spill --source model  # model-approved only
+```
+
+**Why lowest-confidence-first / reject → hand:** approving only the model's
+confident hits teaches it nothing on the tail (pale/tan cups, clipped wordmarks),
+so we surface uncertain predictions first and route the model's failures to manual
+labeling — that's where new signal comes from.
+
+The review UI is READ-ONLY (no polygon editing): each prediction shows as a thin
+contour + faint fill, judged with **A** accept / **R** reject / **S** skip. Accept
+on a zero-detection image confirms it clean (empty negative).
+
+Navigation is resume-friendly: on load (and after each Accept/Reject) it jumps to
+the **first/next pending** image, so you can quit any time and come back exactly
+where the unreviewed work is — decisions persist in `labels.db`. **← / →** step
+one image at a time through the whole mode in file order (INCLUDING already-decided
+ones), so you can go back and **change any past decision** — reversing a reject to
+accept also pulls that image out of the hand-labeler priority queue. Skip leaves an
+image pending (it resurfaces later). Default order is file order; `?sort=conf_asc`
+gives a lowest-confidence-first triage pass instead.
+
+### Machinery / no-smoothie filtering — `flag_smoothie_presence.py`
+
+Machinery / empty-rig shots (blender interior, no cup) are NOT a separate
+category in the Files API — every image is `UserGrab`/`CleanDone` — so category
+filtering can't remove them. Instead, gate on the CONTAINER model: an image with
+zero smoothie detections is flagged `no_smoothie` and excluded EVERYWHERE (review
+queues, the hand labeler `/api/next`, and `export_multi.py`). Run it after each
+`download.py` pull (uses the deployed `yolo_smoothie_seg.pt`):
+
+```bash
+/opt/miniconda3/bin/python labeling/flag_smoothie_presence.py
+#   --conf 0.30   raise the presence threshold    --limit N   trial run
+```
+
+Idempotent: images where a smoothie IS found get any stale flag cleared, so
+re-running after a better container model un-hides recovered cups. Measured on the
+1,123-image pool: 31 flagged (verified genuine machinery — the spill model had
+been false-firing "spill" on the hardware, which the gate now keeps out of the
+dataset). LIMIT: a smoothie the container model itself misses could be
+false-flagged; keep the threshold low (default 0.25 = any detection).
+
+---
+
+## Shared data-prep stages — `download.py` / `run_sam.py`
+
+Both feed the labeler above. Run from the **repo root** (SAM resolves
+`checkpoints/` relative to cwd, so the wrong directory raises FileNotFoundError).
+
+```bash
+# 1. Download every image/jpg in a time range (start NARROW to test).
 python labeling/download.py --start '2026-06-29 00:00:00' --end '2026-06-30 00:00:00'
 #    optional: --category CleanDone   --type image/jpg   --list-only
+#    -> labeling/data/images/<file_id>.jpg   (+ files table in labels.db)
 
-# 2. Run SAM (in the conda env). --limit N for a quick test batch.
+# 2. Run SAM to seed candidate polygons (conda env — needs torch + sam2 + a
+#    checkpoint in checkpoints/; see CLAUDE.md). --limit N for a quick batch.
 /opt/miniconda3/bin/python labeling/run_sam.py --limit 20
-
-# 3. Label. Open http://127.0.0.1:5000
-python labeling/app.py
-
-# 4. Export the dataset (both classes).
-python labeling/export.py --split 0.15
+#    -> data/masks_sam/*.png + data/polygons_sam/*.json
 ```
 
-## Labeling shortcuts
+The API key goes in `.env` at repo root (git-ignored): `ZENBLEN_API_KEY=...`.
+The expensive SAM pass runs once, offline; `app_multi.py` then serves the
+precomputed candidates so labeling stays fast.
 
-| key | action |
-|-----|--------|
-| `A` | accept — mask is good (`good`, or `corrected` if you edited it) |
-| `R` | reject — segmentation failed (`bad`) |
-| `S` | skip / unsure |
-| `E` | toggle edit mode |
-| drag vertex | move a polygon point |
-| click edge | insert a vertex |
-| right-click vertex / `Del` | remove a vertex |
-| `Z` | undo last edit |
-| `←` / `→` | previous / next without saving |
-
-Editing the polygon auto-marks the verdict `corrected` on accept. Verdicts persist
-to `labels.db`, so closing and relaunching resumes at the first unlabeled image.
-
-## Dataset output
-
-- `dataset/images/<id>.jpg` — every non-skip labeled image.
-- `dataset/masks/<id>.png` — rasterized final polygon for `good`/`corrected`;
-  SAM's original (wrong) mask for `bad`.
-- `dataset/labels.csv` — `file_id, order_id, verdict, corrected, created_at`.
-- `dataset/manifest.json` — counts + provenance.
-- `dataset/{train,val}.txt` — positive-set id lists (only with `--split`).
-
-Positives (`good` + `corrected`) are clean segmentation ground truth; `bad` rows
-let you also train a "did SAM succeed" quality classifier.
+> **Note.** The old single-mode SAM labeling UI (`app.py` / `export.py` and the
+> `label.html` / `label.js` frontend) was removed on 2026-07-10 — fully
+> superseded by `app_multi.py`. Its `labels` table remains in `labels.db` as a
+> frozen backup; the migration into the multi-mode tables was done once via
+> `migrate_labels_to_multi.py`.

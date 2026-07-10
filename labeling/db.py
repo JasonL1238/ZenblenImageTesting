@@ -41,6 +41,36 @@ MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo"}
 # writing state, so the image stays undecided and reappears later).
 MODE_STATUSES = ("labeled", "clean")
 
+# --- model-assisted review pipeline (predict_batch.py + app_review.py) -------
+# A THIRD, separate pipeline: run each mode's trained YOLO-seg model over the raw
+# (undecided-for-that-mode) images, store predictions, and let a human
+# Approve / Reject / Edit them. Predictions live in their OWN tables below and
+# do NOT enter training until APPROVED — approval writes into the shared
+# `annotations` (tagged source='model') + `mode_status='labeled'` so the existing
+# export_multi.py picks them up unchanged. Reject leaves the image undecided so
+# the hand pipeline (app_multi.py) re-serves it.
+REVIEW_STATUSES = ("pending", "approved", "rejected")
+
+# Per-image content flags (image_flags table). 'no_smoothie' = a machinery /
+# empty-rig shot with no smoothie in frame; excluded from every pipeline.
+IMAGE_FLAGS = ("no_smoothie",)
+NO_SMOOTHIE = "no_smoothie"
+
+# Provenance values for annotations.source (see the ADD COLUMN migration below).
+SOURCE_HAND = "hand"    # drawn in app_multi.py (default) / migrated legacy labels
+SOURCE_MODEL = "model"  # a model prediction approved (possibly edited) in review
+
+# Deployed per-mode weights for the review pipeline. The container/standard
+# detector historically deploys to `yolo_smoothie_seg.pt`; the multi-mode
+# standard detector deploys to `yolo_standard_seg.pt`. predict_batch.py falls
+# back to a run's best.pt via --weights when a checkpoint isn't deployed yet.
+CHECKPOINTS_DIR = ROOT.parent / "checkpoints"
+MODE_WEIGHTS = {
+    "standard": CHECKPOINTS_DIR / "yolo_standard_seg.pt",
+    "spill": CHECKPOINTS_DIR / "yolo_spill_seg.pt",
+    "logo": CHECKPOINTS_DIR / "yolo_logo_seg.pt",
+}
+
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open the labeling DB, creating the schema on first use.
@@ -98,8 +128,57 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             PRIMARY KEY (file_id, mode)
         );
+
+        -- Model-assisted review pipeline (predict_batch.py + app_review.py).
+        -- Model predictions awaiting human review. Multi-instance like
+        -- `annotations`; polygon is pixel-space so it round-trips identically
+        -- when approved. An image with a prediction row but no accepted
+        -- polygons (zero detections) still gets a review_status row so the
+        -- reviewer can catch false-negatives.
+        CREATE TABLE IF NOT EXISTS predictions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_id    INTEGER NOT NULL REFERENCES files(file_id),
+            mode       TEXT NOT NULL,      -- one of db.MODES
+            polygon    TEXT NOT NULL,      -- JSON list of [x, y] pixel points
+            confidence REAL,               -- model confidence for this instance
+            model_run  TEXT,               -- weights file the prediction came from
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_predictions_file_mode
+            ON predictions(file_id, mode);
+
+        -- One review decision per (image, mode). status is one of
+        -- db.REVIEW_STATUSES. Independent of mode_status: a 'pending' review
+        -- has no mode_status row (so it stays out of training); 'approved'
+        -- writes mode_status; 'rejected' leaves mode_status empty so the hand
+        -- pipeline re-serves the image.
+        CREATE TABLE IF NOT EXISTS review_status (
+            file_id     INTEGER NOT NULL REFERENCES files(file_id),
+            mode        TEXT NOT NULL,
+            status      TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            PRIMARY KEY (file_id, mode)
+        );
+
+        -- Per-image content flags, independent of mode. flag='no_smoothie' marks
+        -- machinery / empty-rig shots (the container model finds no smoothie) so
+        -- they are excluded EVERYWHERE: review queues, hand labeler, and export.
+        -- Set by flag_smoothie_presence.py.
+        CREATE TABLE IF NOT EXISTS image_flags (
+            file_id    INTEGER PRIMARY KEY REFERENCES files(file_id),
+            flag       TEXT NOT NULL,      -- one of db.IMAGE_FLAGS
+            confidence REAL,               -- top smoothie confidence seen (0 if none)
+            created_at TEXT NOT NULL
+        );
         """
     )
+    # Provenance column on annotations (additive; older DBs predate it). Guarded
+    # so re-running is a no-op. Existing rows default to 'hand'.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(annotations)")}
+    if "source" not in cols:
+        conn.execute(
+            f"ALTER TABLE annotations ADD COLUMN source TEXT DEFAULT '{SOURCE_HAND}'"
+        )
     conn.commit()
 
 

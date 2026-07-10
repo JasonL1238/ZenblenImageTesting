@@ -87,12 +87,16 @@ function draw() {
     const p = shapes[s];
     if (p.length) {
       ctx.strokeStyle = color;
-      ctx.fillStyle = hexA(color, s === activeIdx ? 0.22 : 0.12);
       ctx.beginPath();
       ctx.moveTo(p[0][0], p[0][1]);
       for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]);
       if (p.length >= 3) ctx.closePath();
-      ctx.fill();
+      // Spill mode: outline only — the fill obscures the residue we're tracing.
+      // Other modes keep the translucent fill for at-a-glance coverage.
+      if (mode !== "spill") {
+        ctx.fillStyle = hexA(color, s === activeIdx ? 0.22 : 0.12);
+        ctx.fill();
+      }
       ctx.stroke();
     }
     const r = handleRadius();
@@ -174,6 +178,7 @@ document.addEventListener("keydown", (e) => {
     case "s": skip(); break;
     case "n": newShape(); break;
     case "x": clearActive(); break;
+    case "d": deleteActiveShape(); break;
     case "z": undo(); break;
   }
 });
@@ -189,6 +194,17 @@ function newShape() {
 function clearActive() {
   if (!shapes[activeIdx] || !shapes[activeIdx].length) return;
   snapshot(); shapes[activeIdx] = []; drag = null; markDirty(); draw();
+}
+// Remove the whole active polygon (click any of its vertices/edges first to
+// make it active). Always leaves at least one blank shape to keep drawing.
+function deleteActiveShape() {
+  const a = shapes[activeIdx];
+  if (!a || (shapes.length === 1 && !a.length)) return;   // nothing to delete
+  snapshot();
+  shapes.splice(activeIdx, 1);
+  if (!shapes.length) shapes = [[]];
+  activeIdx = Math.min(activeIdx, shapes.length - 1);
+  drag = null; markDirty(); updateSidebar(); draw();
 }
 function undo() {
   if (!undoStack.length) return;
@@ -260,7 +276,23 @@ function goNext() {
     histIndex = visited.length - 1;
   });
 }
-function goPrev() { if (histIndex > 0) { histIndex--; loadItem(visited[histIndex]); } }
+function goPrev() {
+  if (histIndex > 0) { histIndex--; loadItem(visited[histIndex]); return; }
+  // At the left edge of this session's history: seek the previous image in the
+  // WHOLE pool (any status), so you can always go back and re-edit an image even
+  // if it wasn't touched this run. Prepend it so forward replay keeps working.
+  if (fileId == null) return;
+  fetch(`/api/seek?mode=${mode}&file_id=${fileId}&dir=prev`)
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then((d) => {
+      if (d.edge) { flashWarn("Already at the first image."); return; }
+      setItem(d);
+      if (visited[0] !== d.file_id) visited.unshift(d.file_id);
+      histIndex = 0;
+    })
+    .catch((err) => flashWarn(
+      "Can't go back (" + err.message + "). Restart the server so /api/seek loads."));
+}
 function loadItem(id) {
   fetch(`/api/item/${id}?mode=${mode}`).then((r) => r.json()).then(setItem);
 }
@@ -273,6 +305,7 @@ function setItem(d) {
   dirty = false; drag = null; undoStack = [];
   doneEl.style.display = "none"; frameEl.style.display = "";
   fileidEl.textContent = `#${d.file_id}` + (status ? ` (was: ${status})` : "");
+  document.getElementById("priobadge").classList.toggle("on", !!d.priority);
   updateSidebar();
 
   img = new Image();
@@ -296,7 +329,9 @@ function setItem(d) {
 
 function showDone() {
   fileId = null; frameEl.style.display = "none"; doneEl.style.display = "block";
-  fileidEl.textContent = ""; updateSidebar();
+  fileidEl.textContent = "";
+  document.getElementById("priobadge").classList.remove("on");
+  updateSidebar();
 }
 
 // ---- sidebar / progress -----------------------------------------------------
@@ -313,13 +348,17 @@ function updateSidebar() {
   const cleanBtn = document.getElementById("btnClean");
   // Clean is only meaningful with no shapes; keep it enabled but it will confirm.
   cleanBtn.classList.toggle("clean", n === 0);
-  ["btnSave", "btnClean", "btnSkip", "btnNew"].forEach((id) =>
+  ["btnSave", "btnClean", "btnSkip", "btnNew", "btnDel"].forEach((id) =>
     (document.getElementById(id).disabled = !fileId));
 }
 function refreshProgress() {
   fetch("/api/progress").then((r) => r.json()).then((p) => {
-    const rows = Object.entries(p.modes).map(([m, c]) =>
-      `<div><b>${m}</b>: ${c.decided}/${p.total} · ${c.labeled} labeled · ${c.clean} clean</div>`);
+    const rows = Object.entries(p.modes).map(([m, c]) => {
+      const prio = c.priority_total
+        ? ` · <span class="prio">priority ${c.priority_remaining}/${c.priority_total} left</span>`
+        : "";
+      return `<div><b>${m}</b>: ${c.decided}/${p.total} · ${c.labeled} labeled · ${c.clean} clean${prio}</div>`;
+    });
     document.getElementById("counts").innerHTML = rows.join("");
   });
 }
@@ -329,6 +368,7 @@ document.getElementById("btnSave").onclick = save;
 document.getElementById("btnClean").onclick = markClean;
 document.getElementById("btnSkip").onclick = skip;
 document.getElementById("btnNew").onclick = newShape;
+document.getElementById("btnDel").onclick = deleteActiveShape;
 document.querySelectorAll(".modebtn").forEach((b) =>
   (b.onclick = () => switchMode(b.dataset.m)));
 

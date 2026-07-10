@@ -36,10 +36,21 @@ class ClassicalCVPipeline(BlendPipeline):
 
         roi = crop_to_roi(image, roi_mask)
 
+        # trained-logo mask (ADDITIVE FP filter): run the logo model on the full
+        # frame, then crop to the SAME bbox as the ROI so it aligns with the
+        # crop-space component loop in _deviation_mask.
+        logo_crop = None
+        if self.config.dev_logo_yolo_suppress:
+            from smoothie_cv.detection.logo import detect_logo
+            full_logo = detect_logo(image, self.config)
+            x0, y0 = roi.offset
+            ch, cw = roi.mask.shape
+            logo_crop = full_logo[y0:y0 + ch, x0:x0 + cw]
+
         if self.config.classical_method == "canny":
             unblended = self._edge_mask(roi.image, roi.mask)
         else:
-            unblended = self._deviation_mask(roi.image, roi.mask)
+            unblended = self._deviation_mask(roi.image, roi.mask, logo_crop)
 
         # clip to ROI and map back to full-frame coords
         unblended = cv2.bitwise_and(unblended, roi.mask)
@@ -146,7 +157,8 @@ class ClassicalCVPipeline(BlendPipeline):
         return out
 
     # ── primary: colour-agnostic local-deviation detector ──────────────────────
-    def _deviation_mask(self, image: np.ndarray, roi_mask: np.ndarray) -> np.ndarray:
+    def _deviation_mask(self, image: np.ndarray, roi_mask: np.ndarray,
+                        logo_mask: np.ndarray | None = None) -> np.ndarray:
         """
         Flag contiguous patches whose LAB colour deviates from the local base.
 
@@ -305,6 +317,17 @@ class ClassicalCVPipeline(BlendPipeline):
                 cy_i, cx_i = cents[lab_i][1], cents[lab_i][0]
                 if (logo_band[0] <= cy_i <= logo_band[1]
                         and logo_band[2] <= cx_i <= logo_band[3]):
+                    continue
+            # trained-logo-mask suppression (ADDITIVE; see detect_logo). A
+            # component whose pixels fall mostly inside the learned wordmark mask
+            # is print footprint — reject it. Fraction-of-component (not IoU): a
+            # real chunk grazing a letter keeps most of its mass outside the tight
+            # mask and survives. Catches the CLIPPED-wordmark FPs the classical
+            # text-line detector can't confirm. Gates ALL paths (compact/dark/chroma).
+            if logo_mask is not None:
+                comp = labels == lab_i
+                inside = int((comp & (logo_mask > 0)).sum())
+                if inside / max(area, 1) >= cfg.dev_logo_yolo_overlap:
                     continue
             # area ceiling is common; the floor differs by path (colour-cued paths
             # accept smaller flecks), so only reject on the ceiling / relaxed floor here.

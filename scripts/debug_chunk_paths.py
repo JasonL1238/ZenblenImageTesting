@@ -32,6 +32,15 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
     roi = crop_to_roi(image, roi_mask)
     img, rmask = roi.image, roi.mask
 
+    # trained-logo mask (mirror of _deviation_mask): full-frame logo → crop to ROI bbox
+    logo_crop = None
+    if cfg.dev_logo_yolo_suppress:
+        from smoothie_cv.detection.logo import detect_logo
+        full_logo = detect_logo(image, cfg)
+        x0, y0 = roi.offset
+        ch, cw = roi.mask.shape
+        logo_crop = full_logo[y0:y0 + ch, x0:x0 + cw]
+
     m = (rmask > 0).astype(np.float32)
     lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
     ek = cv2.getStructuringElement(
@@ -152,6 +161,13 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
             print(f"   comp {li:3d}: area={area:5d} cy={cents[li][1]:6.1f} "
                   f"cx={cents[li][0]:6.1f}  rej:logo_band")
             continue
+        if logo_crop is not None:
+            inside = int((comp_mask & (logo_crop > 0)).sum())
+            if inside / max(area, 1) >= cfg.dev_logo_yolo_overlap:
+                print(f"   comp {li:3d}: area={area:5d} cy={cents[li][1]:6.1f} "
+                      f"cx={cents[li][0]:6.1f}  rej:logo_yolo "
+                      f"(overlap={inside/max(area,1):.2f})")
+                continue
         if aspect < cfg.dev_aspect_lo:
             verdict = "rej:aspect_lo"
         else:

@@ -87,6 +87,11 @@ def main() -> None:
                     help="report output dir")
     ap.add_argument("--baseline", default="outputs/report/scores.csv",
                     help="previous scores.csv to diff verdicts against")
+    ap.add_argument("--logo-yolo", action="store_true",
+                    help="enable trained-logo-mask chunk suppression "
+                         "(dev_logo_yolo_suppress); runs the logo model live per image")
+    ap.add_argument("--logo-weights", default=None,
+                    help="logo YOLO weights (default config.logo_weights)")
     args = ap.parse_args()
 
     out      = Path(args.out)
@@ -112,6 +117,14 @@ def main() -> None:
         sys.exit(1)
 
     cfg  = Config()
+    if args.logo_yolo:
+        cfg.dev_logo_yolo_suppress = True
+        if args.logo_weights:
+            cfg.logo_weights = Path(args.logo_weights)
+        if not Path(cfg.logo_weights).exists():
+            print(f"ERROR: logo weights not found: {cfg.logo_weights}")
+            sys.exit(1)
+        print(f"Logo suppression ON (logo weights: {cfg.logo_weights})")
     pipe = ClassicalCVPipeline(cfg)
     imgs = sorted(p for d in IMG_DIRS for p in d.glob("*.jpg"))
 

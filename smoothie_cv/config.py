@@ -383,6 +383,25 @@ class Config:
     yolo_weights: Path = field(
         default_factory=lambda: Path("checkpoints/yolo_smoothie_seg.pt"))
 
+    # --- YOLO-seg LOGO suppression (chunk-detection FP filter, ADDITIVE) ---
+    # A trained "zenblen"-wordmark seg model (train_multi.py --mode logo). When
+    # dev_logo_yolo_suppress is on, detect_logo() produces a full-frame logo mask
+    # and any accepted chunk component whose pixel-overlap with it is ≥
+    # dev_logo_yolo_overlap is rejected as print footprint. This AUGMENTS the
+    # classical _logo_text_labels()/band/corner rules — it targets the residual
+    # CLIPPED-wordmark FPs the classical text-line detector can't confirm (too few
+    # letters / short span). Default OFF: opt-in via --logo-yolo for A/B eval.
+    dev_logo_yolo_suppress: bool = False
+    logo_weights: Path = field(
+        default_factory=lambda: Path("checkpoints/yolo_logo_seg.pt"))
+    logo_conf: float = 0.25          # instance confidence floor for the mask union
+    # Reject a chunk component when this fraction of ITS pixels fall inside the
+    # logo mask. Fraction-of-component (not IoU): a real chunk grazing a letter
+    # keeps most of its mass outside the tight mask (low fraction → kept); a
+    # clipped letter sits almost entirely inside (→ rejected). Raise toward
+    # 0.6–0.7 if the A/B eval shows a real chunk lost to a letter it overlaps.
+    dev_logo_yolo_overlap: float = 0.5
+
     # --- SAM2 (container detection, LEGACY/reference) ---
     sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
     # Top-edge prior policy. The RAW SAM mask is the primary output; the

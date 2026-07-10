@@ -20,6 +20,12 @@
   #banner .dataset { font-weight:600; opacity:.8; }
   #banner .spacer { flex:1; }
   #banner #fileid { font-weight:600; opacity:.85; }
+  /* Priority badge — dark pill so it pops on the mode-colored banner. Hidden
+     unless the current image is in this mode's priority queue. */
+  #banner #priobadge { display:none; padding:2px 10px; border-radius:10px;
+            background:#0d0f12; color:#ffd23f; font-size:12px; font-weight:800;
+            letter-spacing:.06em; }
+  #banner #priobadge.on { display:inline; }
 
   /* Mode switch bar. */
   #modebar { display:flex; align-items:center; gap:8px; padding:8px 16px;
@@ -62,6 +68,7 @@
           background:rgba(224,82,74,.15); color:#e0524a; font-size:12px; }
   #counts { color:var(--muted); font-size:12px; line-height:1.9; }
   #counts b { color:var(--fg); }
+  #counts .prio { color:var(--mode); font-weight:600; }
   #done { display:none; text-align:center; color:var(--muted); font-size:16px; }
 </style>
 
@@ -69,6 +76,7 @@
   <span id="modename">MODE 2 · SPILLED SMOOTHIE</span>
   <span class="dataset" id="dataset">→ spill_dataset</span>
   <span class="spacer"></span>
+  <span id="priobadge">★ PRIORITY</span>
   <span id="fileid"></span>
 </div>
 
@@ -92,6 +100,7 @@
     <button class="btn clean"   id="btnClean">Mark Clean (no anomaly)<span class="k">K</span></button>
     <button class="btn"         id="btnSkip">Skip (no save)<span class="k">S</span></button>
     <button class="btn"         id="btnNew">New shape<span class="k">N</span></button>
+    <button class="btn"         id="btnDel">Delete active shape<span class="k">D</span></button>
     <div id="warn"></div>
 
     <h2>Draw</h2>
@@ -101,7 +110,9 @@
       <li>click an edge — insert a vertex</li>
       <li>right-click a vertex — remove it</li>
       <li><span class="key">N</span> finish shape, start another</li>
-      <li><span class="key">X</span> clear the active shape</li>
+      <li>click a shape's edge/vertex — make it active</li>
+      <li><span class="key">D</span> delete the active shape</li>
+      <li><span class="key">X</span> clear the active shape's points</li>
       <li><span class="key">Z</span> undo</li>
     </ul>
 
@@ -109,6 +120,7 @@
     <ul>
       <li><span class="key">1</span>/<span class="key">2</span>/<span class="key">3</span> switch pipeline (keeps image)</li>
       <li><span class="key">←</span>/<span class="key">→</span> prev / next (no save)</li>
+      <li><span class="key">←</span> goes back to ANY earlier image to re-edit — even if unchanged this run (banner shows <i>was: …</i>)</li>
     </ul>
 
     <h2>Progress</h2>

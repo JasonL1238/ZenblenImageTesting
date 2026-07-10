@@ -75,21 +75,42 @@ def main() -> None:
     ap.add_argument("--weights", default="checkpoints/yolo_smoothie_seg.pt")
     ap.add_argument("--out", default="outputs/pipeline_test_set/report")
     ap.add_argument("--limit", type=int, default=0, help="cap #images (0=all), for a quick smoke run")
+    ap.add_argument("--roi-cache", default=None,
+                    help="dir of cached <stem>.png ROI masks; skips live YOLO ROI "
+                         "(both A/B runs then share identical ROIs)")
+    ap.add_argument("--logo-yolo", action="store_true",
+                    help="enable trained-logo-mask chunk suppression (runs logo model live)")
+    ap.add_argument("--logo-weights", default=None,
+                    help="logo YOLO weights (default config.logo_weights)")
     args = ap.parse_args()
 
     out      = Path(args.out)
     overlays = out / "overlays"
     overlays.mkdir(parents=True, exist_ok=True)
 
-    from ultralytics import YOLO
-    weights = Path(args.weights)
-    if not weights.exists():
-        print(f"ERROR: weights not found: {weights}")
+    roi_cache = Path(args.roi_cache) if args.roi_cache else None
+    model = None
+    if roi_cache is None:
+        from ultralytics import YOLO
+        weights = Path(args.weights)
+        if not weights.exists():
+            print(f"ERROR: weights not found: {weights}")
+            sys.exit(1)
+        print(f"Loading YOLO ({weights}) …")
+        model = YOLO(str(weights))
+    elif not roi_cache.is_dir():
+        print(f"ERROR: ROI cache not found: {roi_cache}")
         sys.exit(1)
-    print(f"Loading YOLO ({weights}) …")
-    model = YOLO(str(weights))
 
     cfg  = Config()
+    if args.logo_yolo:
+        cfg.dev_logo_yolo_suppress = True
+        if args.logo_weights:
+            cfg.logo_weights = Path(args.logo_weights)
+        if not Path(cfg.logo_weights).exists():
+            print(f"ERROR: logo weights not found: {cfg.logo_weights}")
+            sys.exit(1)
+        print(f"Logo suppression ON (logo weights: {cfg.logo_weights})")
     pipe = ClassicalCVPipeline(cfg)
     from smoothie_cv.detection.yolo import get_yolo_roi
 
@@ -110,7 +131,11 @@ def main() -> None:
         shade = _shade(img)
 
         try:
-            roi = get_yolo_roi(model(img, verbose=False)[0], (h, w))
+            if roi_cache is not None:
+                cached = cv2.imread(str(roi_cache / f"{p.stem}.png"), cv2.IMREAD_GRAYSCALE)
+                roi = cached if cached is not None else np.zeros((h, w), dtype=np.uint8)
+            else:
+                roi = get_yolo_roi(model(img, verbose=False)[0], (h, w))
         except Exception as e:
             print(f"  [{i}] ROI ERROR {p.stem[:36]}: {e}")
             roi = np.zeros((h, w), dtype=np.uint8)
