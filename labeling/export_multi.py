@@ -87,6 +87,13 @@ def export_mode(mode: str, out: Path, val_frac: float, test_frac: float,
     'hand' = exclude model-approved (pseudo-label) images; 'model' = only them;
     None = all (default)."""
     class_name = db.MODE_CLASS_NAMES[mode]
+    # Wipe prior images/labels first: the split is by sorted file_id + fraction,
+    # so adding images shifts every boundary and a file_id can move between
+    # splits. Copying over a stale export would leave the same mode_<fid> file in
+    # two splits -> train/val/test LEAKAGE. Recreate the split dirs clean.
+    for sub in ("images", "labels"):
+        if (out / sub).exists():
+            shutil.rmtree(out / sub)
     for split in ("train", "val", "test"):
         (out / "images" / split).mkdir(parents=True, exist_ok=True)
         (out / "labels" / split).mkdir(parents=True, exist_ok=True)
