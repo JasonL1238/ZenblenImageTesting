@@ -1,50 +1,46 @@
-# SAM checkpoints (download separately — see CLAUDE.md)
-checkpoints/*.pt
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
 
-# Generated outputs
+# Generated outputs / debug
 outputs/
+debug_outputs/
 
 # Environment / secrets
 .env
 
-# Labeling tool artefacts (downloaded images, SAM caches, verdicts, dataset)
-labeling/data/
-labeling/dataset/
-labeling/labels.db
-labeling/labels.db-*
-# Local safety snapshots — kept on disk, never committed
-labeling/labels.db.bak*
-# Stray root DB created by running a script from the repo root
-/labels.db
-
-# Superseded weight backups (originals preserved in runs/<mode>-seg/*/weights/best.pt)
-checkpoints/*.bak*
-
-# Multi-mode labeler (app_multi.py) per-mode exports — rebuild via export_multi.py.
-# chunk_dataset is intentionally tracked so a fresh clone can train chunk YOLO
-# without copying labels.db / images (pull → training/train_multi.py --mode chunk).
-labeling/spill_dataset/
-labeling/logo_dataset/
-labeling/smoothie_dataset_std/
-# labeling/chunk_dataset/  # tracked for remote pull-and-train
-
-# Dataset pipeline output (master annotations, generated masks, exports) — the
-# CODE that builds these is committed; the generated data is not.
-smoothie_dataset/
-debug_outputs/
-
 # Python virtualenv (use conda base /opt/miniconda3 instead)
 .venv/
 
-# YOLO base checkpoint (download before training)
-yolo11n-seg.pt
-*.pt
+# ---------------------------------------------------------------------------
+# Raw images & SAM caches — NOT pushed (re-download / regenerate locally).
+# Training annotations + YOLO exports ARE tracked (see below).
+# ---------------------------------------------------------------------------
+labeling/data/
+labeling/dataset/
+smoothie_dataset/
 
-# Training run outputs (weights, logs, plots)
-runs/
+# SQLite WAL/SHM + local DB backups (labels.db itself IS tracked)
+labeling/labels.db-*
+labeling/labels.db.bak*
+/labels.db
+
+# Superseded checkpoint backups
+checkpoints/*.bak*
+
+# ---------------------------------------------------------------------------
+# Weights: ignore .pt by default, then allow YOLO deploy + training runs.
+# SAM2 (~149 MB) stays ignored — over GitHub's 100 MB file limit; download
+# separately (see CLAUDE.md). Base yolo11n-seg.pt auto-downloads via ultralytics.
+# ---------------------------------------------------------------------------
+*.pt
+!checkpoints/yolo_*.pt
+!runs/**/weights/*.pt
+
+# Ignore training-run artifacts other than weights/
+runs/**
+!runs/**/
+!runs/**/weights/
+!runs/**/weights/**
