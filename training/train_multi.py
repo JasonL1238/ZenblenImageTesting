@@ -51,6 +51,36 @@ BASE_MODEL = "yolo11n-seg.pt"   # nano; swap to yolo11s-seg.pt for more capacity
 DEVICE = "cpu"                  # MPS (Apple Silicon) segfaults on YOLO-seg
 
 
+def _data_yaml_with_abs_path(data_yaml: Path) -> Path:
+    """Rewrite ``path:`` to an absolute dataset root for Ultralytics.
+
+    Ultralytics resolves relative ``path: .`` against the process cwd (not the
+    yaml's directory), so a portable ``path: .`` export fails unless we inject
+    the real dataset root at train time. Writes a sibling ``_train_data.yaml``
+    (gitignored via the leading underscore convention / local-only).
+    """
+    root = data_yaml.resolve().parent
+    names_line = "chunk"
+    text = data_yaml.read_text(encoding="utf-8")
+    for line in text.splitlines():
+        if line.strip().startswith("0:"):
+            names_line = line.split(":", 1)[1].strip()
+            break
+    out = root / "_train_data.yaml"
+    out.write_text(
+        f"path: {root.as_posix()}\n"
+        "train: images/train\n"
+        "val: images/val\n"
+        "test: images/test\n"
+        "\n"
+        "nc: 1\n"
+        "names:\n"
+        f"  0: {names_line}\n",
+        encoding="utf-8",
+    )
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train a per-mode YOLO-seg model")
     ap.add_argument("--mode", required=True, choices=list(MODE_CFG),
@@ -72,13 +102,14 @@ def main() -> None:
             f"{data_yaml} not found — export the dataset first:\n"
             f"    python labeling/export_multi.py --mode {args.mode}"
         )
+    train_yaml = _data_yaml_with_abs_path(data_yaml)
 
     # Import here so a missing dataset fails fast without loading torch.
     from ultralytics import YOLO
 
     model = YOLO(args.base)
     model.train(
-        data=str(data_yaml),
+        data=str(train_yaml),
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,

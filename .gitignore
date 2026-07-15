@@ -27,6 +27,9 @@ labeling/labels.db-*
 labeling/labels.db.bak*
 /labels.db
 
+# Train-time absolute-path yaml written by training/train_multi.py
+labeling/**/_train_data.yaml
+
 # Superseded checkpoint backups
 checkpoints/*.bak*
 
