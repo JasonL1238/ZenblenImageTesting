@@ -1,4 +1,4 @@
-"""Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard).
+"""Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard / chunk).
 
 Each mode is its own single-class YOLO11n-seg model, independent of the container
 detector trained by training/train.py. Same recipe (nano net, CPU — MPS segfaults
@@ -39,6 +39,11 @@ MODE_CFG: dict[str, dict[str, str]] = {
         "data":    "labeling/logo_dataset/data.yaml",
         "project": "runs/logo-seg",
         "deploy":  "checkpoints/yolo_logo_seg.pt",
+    },
+    "chunk": {
+        "data":    "labeling/chunk_dataset/data.yaml",
+        "project": "runs/chunk-seg",
+        "deploy":  "checkpoints/yolo_chunk_seg.pt",
     },
 }
 

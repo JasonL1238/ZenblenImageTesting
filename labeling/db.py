@@ -20,6 +20,7 @@ DB_PATH = ROOT / "labels.db"
 IMAGES_DIR = ROOT / "data" / "images"
 MASKS_DIR = ROOT / "data" / "masks_sam"
 POLYGONS_DIR = ROOT / "data" / "polygons_sam"
+CHUNK_SEED_DIR = ROOT / "data" / "polygons_chunk_seed"
 DATASET_DIR = ROOT / "dataset"
 
 VERDICTS = ("good", "corrected", "bad", "skip")
@@ -33,10 +34,11 @@ VERDICTS = ("good", "corrected", "bad", "skip")
 #   standard -> smoothie inside the cup   -> class 0: smoothie
 #   spill    -> smoothie outside the cup  -> class 0: spill
 #   logo     -> the zenblen logo/wordmark -> class 0: logo
-# One image labeled in all three modes yields three SEPARATE image+label pairs,
+#   chunk    -> an unblended lump/chunk   -> class 0: chunk
+# One image labeled in all four modes yields four SEPARATE image+label pairs,
 # one per dataset — never a single file with mixed-class labels.
-MODES = ("standard", "spill", "logo")
-MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo"}
+MODES = ("standard", "spill", "logo", "chunk")
+MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo", "chunk": "chunk"}
 # Persisted statuses. "skip" is deliberately NOT stored (Skip = advance without
 # writing state, so the image stays undecided and reappears later).
 MODE_STATUSES = ("labeled", "clean")
@@ -69,6 +71,7 @@ MODE_WEIGHTS = {
     "standard": CHECKPOINTS_DIR / "yolo_standard_seg.pt",
     "spill": CHECKPOINTS_DIR / "yolo_spill_seg.pt",
     "logo": CHECKPOINTS_DIR / "yolo_logo_seg.pt",
+    "chunk": CHECKPOINTS_DIR / "yolo_chunk_seg.pt",
 }
 
 
@@ -203,5 +206,5 @@ def load_dotenv() -> None:
 
 def ensure_dirs() -> None:
     """Create the on-disk data directories used by the pipeline stages."""
-    for d in (IMAGES_DIR, MASKS_DIR, POLYGONS_DIR):
+    for d in (IMAGES_DIR, MASKS_DIR, POLYGONS_DIR, CHUNK_SEED_DIR):
         d.mkdir(parents=True, exist_ok=True)

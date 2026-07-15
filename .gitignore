@@ -26,10 +26,13 @@ labeling/labels.db.bak*
 # Superseded weight backups (originals preserved in runs/<mode>-seg/*/weights/best.pt)
 checkpoints/*.bak*
 
-# Multi-mode labeler (app_multi.py) per-mode exports — code committed, data not.
+# Multi-mode labeler (app_multi.py) per-mode exports — rebuild via export_multi.py.
+# chunk_dataset is intentionally tracked so a fresh clone can train chunk YOLO
+# without copying labels.db / images (pull → training/train_multi.py --mode chunk).
 labeling/spill_dataset/
 labeling/logo_dataset/
 labeling/smoothie_dataset_std/
+# labeling/chunk_dataset/  # tracked for remote pull-and-train
 
 # Dataset pipeline output (master annotations, generated masks, exports) — the
 # CODE that builds these is committed; the generated data is not.

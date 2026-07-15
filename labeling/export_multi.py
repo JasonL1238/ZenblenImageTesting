@@ -4,6 +4,7 @@ Each mode is an INDEPENDENT single-class dataset (no mixed-class label files):
   standard -> smoothie_dataset_std/   class 0: smoothie
   spill    -> spill_dataset/          class 0: spill
   logo     -> logo_dataset/           class 0: logo
+  chunk    -> chunk_dataset/          class 0: chunk
 
 Exported filenames are mode-prefixed (``spill_4821.jpg`` / ``spill_4821.txt``)
 so any file is self-identifying even out of its folder.
@@ -35,6 +36,7 @@ MODE_DIRS = {
     "standard": db.ROOT / "smoothie_dataset_std",
     "spill":    db.ROOT / "spill_dataset",
     "logo":     db.ROOT / "logo_dataset",
+    "chunk":    db.ROOT / "chunk_dataset",
 }
 
 
@@ -165,8 +167,9 @@ def export_mode(mode: str, out: Path, val_frac: float, test_frac: float,
             empty += 1
         counts[split] += 1
 
+    # Relative path so a cloned repo trains without rewriting machine-local paths.
     (out / "data.yaml").write_text(
-        f"path: {out.resolve()}\n"
+        "path: .\n"
         "train: images/train\n"
         "val: images/val\n"
         "test: images/test\n"
