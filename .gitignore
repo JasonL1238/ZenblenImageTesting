@@ -4,45 +4,31 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
-# Generated outputs / debug
-outputs/
-debug_outputs/
+# Generated outputs
+active_pipeline/outputs/
+training/outputs/
+training/labeling/data/
+training/labeling/dataset/
 
 # Environment / secrets
 .env
-
-# Python virtualenv (use conda base /opt/miniconda3 instead)
 .venv/
 
-# ---------------------------------------------------------------------------
-# Raw images — NOT pushed (re-download locally).
-# Training annotations + YOLO exports ARE tracked (see below).
-# ---------------------------------------------------------------------------
-labeling/data/
-labeling/dataset/
-smoothie_dataset/
-
 # SQLite WAL/SHM + local DB backups (labels.db itself IS tracked)
-labeling/labels.db-*
-labeling/labels.db.bak*
-/labels.db
+training/labeling/labels.db-*
+training/labeling/labels.db.bak*
 
-# Train-time absolute-path yaml written by training/train_multi.py
-labeling/**/_train_data.yaml
+# Train-time absolute-path yaml
+training/labeling/**/_train_data.yaml
 
-# Superseded checkpoint backups
-checkpoints/*.bak*
-
-# ---------------------------------------------------------------------------
-# Weights: ignore .pt by default, then allow YOLO deploy + training runs.
-# Base yolo11n-seg.pt auto-downloads via ultralytics.
-# ---------------------------------------------------------------------------
+# Weights: ignore .pt by default, then allow deploy + training checkpoints/runs
 *.pt
-!checkpoints/yolo_*.pt
-!runs/**/weights/*.pt
+!active_pipeline/checkpoints/yolo_*.pt
+!training/checkpoints/yolo_*.pt
+!training/runs/**/weights/*.pt
 
-# Ignore training-run artifacts other than weights/
-runs/**
-!runs/**/
-!runs/**/weights/
-!runs/**/weights/**
+# Training-run artifacts other than weights/
+training/runs/**
+!training/runs/**/
+!training/runs/**/weights/
+!training/runs/**/weights/**

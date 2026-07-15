@@ -1,64 +1,61 @@
 """Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard / chunk).
 
-Each mode is its own single-class YOLO11n-seg model, independent of the container
-detector trained by training/train.py. Same recipe (nano net, CPU — MPS segfaults
-on YOLO-seg), just pointed at the per-mode dataset produced by export_multi.py.
+Run from the ``training/`` directory (paths below are cwd-relative to training/):
 
-Run from the repo root (all paths below are cwd-relative). End-to-end, once images
-are labeled in app_multi.py:
-    python labeling/export_multi.py --mode spill              # build the dataset
-    /opt/miniconda3/bin/python training/train_multi.py --mode spill   # train
+    python labeling/export_multi.py --mode spill
+    /opt/miniconda3/bin/python train_multi.py --mode spill
 
-Runs save to runs/<mode>-seg/<name>/weights/{best,last}.pt
+Runs save to ``training/runs/<mode>-seg/<name>/weights/{best,last}.pt``.
+
+Deploy targets:
+  standard / spill / chunk → ``../active_pipeline/checkpoints/``
+  logo                     → ``checkpoints/yolo_logo_seg.pt`` (training-only)
 
 Prereqs:
-    - Conda base env has ultralytics + torch: /opt/miniconda3/bin/python
+    - Conda base env has ultralytics + torch
     - Base checkpoint yolo11n-seg.pt (ultralytics auto-downloads if missing)
-    - Dataset exported for the mode (the --mode's data.yaml must exist)
+    - Dataset exported for the mode
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
-# Per-mode config. `data` matches export_multi.py's output dirs; `deploy` is the
-# suggested live-weights path (these are NEW models — they do NOT overwrite the
-# container detector's checkpoints/yolo_smoothie_seg.pt).
+# Resolve relative to this file so train works regardless of cwd.
+_TRAINING = Path(__file__).resolve().parent
+_REPO = _TRAINING.parent
+_ACTIVE_CKPT = _REPO / "active_pipeline" / "checkpoints"
+_TRAIN_CKPT = _TRAINING / "checkpoints"
+
 MODE_CFG: dict[str, dict[str, str]] = {
     "standard": {
-        "data":    "labeling/smoothie_dataset_std/data.yaml",
-        "project": "runs/standard-seg",
-        "deploy":  "checkpoints/yolo_standard_seg.pt",
+        "data":    str(_TRAINING / "labeling/smoothie_dataset_std/data.yaml"),
+        "project": str(_TRAINING / "runs/standard-seg"),
+        "deploy":  str(_ACTIVE_CKPT / "yolo_standard_seg.pt"),
     },
     "spill": {
-        "data":    "labeling/spill_dataset/data.yaml",
-        "project": "runs/spill-seg",
-        "deploy":  "checkpoints/yolo_spill_seg.pt",
+        "data":    str(_TRAINING / "labeling/spill_dataset/data.yaml"),
+        "project": str(_TRAINING / "runs/spill-seg"),
+        "deploy":  str(_ACTIVE_CKPT / "yolo_spill_seg.pt"),
     },
     "logo": {
-        "data":    "labeling/logo_dataset/data.yaml",
-        "project": "runs/logo-seg",
-        "deploy":  "checkpoints/yolo_logo_seg.pt",
+        "data":    str(_TRAINING / "labeling/logo_dataset/data.yaml"),
+        "project": str(_TRAINING / "runs/logo-seg"),
+        "deploy":  str(_TRAIN_CKPT / "yolo_logo_seg.pt"),
     },
     "chunk": {
-        "data":    "labeling/chunk_dataset/data.yaml",
-        "project": "runs/chunk-seg",
-        "deploy":  "checkpoints/yolo_chunk_seg.pt",
+        "data":    str(_TRAINING / "labeling/chunk_dataset/data.yaml"),
+        "project": str(_TRAINING / "runs/chunk-seg"),
+        "deploy":  str(_ACTIVE_CKPT / "yolo_chunk_seg.pt"),
     },
 }
 
-BASE_MODEL = "yolo11n-seg.pt"   # nano; swap to yolo11s-seg.pt for more capacity
-DEVICE = "cpu"                  # MPS (Apple Silicon) segfaults on YOLO-seg
+BASE_MODEL = "yolo11n-seg.pt"
+DEVICE = "cpu"
 
 
 def _data_yaml_with_abs_path(data_yaml: Path) -> Path:
-    """Rewrite ``path:`` to an absolute dataset root for Ultralytics.
-
-    Ultralytics resolves relative ``path: .`` against the process cwd (not the
-    yaml's directory), so a portable ``path: .`` export fails unless we inject
-    the real dataset root at train time. Writes a sibling ``_train_data.yaml``
-    (gitignored via the leading underscore convention / local-only).
-    """
+    """Rewrite ``path:`` to an absolute dataset root for Ultralytics."""
     root = data_yaml.resolve().parent
     names_line = "chunk"
     text = data_yaml.read_text(encoding="utf-8")
@@ -100,12 +97,14 @@ def main() -> None:
     if not data_yaml.exists():
         raise FileNotFoundError(
             f"{data_yaml} not found — export the dataset first:\n"
-            f"    python labeling/export_multi.py --mode {args.mode}"
+            f"    cd training && python labeling/export_multi.py --mode {args.mode}"
         )
     train_yaml = _data_yaml_with_abs_path(data_yaml)
 
-    # Import here so a missing dataset fails fast without loading torch.
     from ultralytics import YOLO
+
+    _ACTIVE_CKPT.mkdir(parents=True, exist_ok=True)
+    _TRAIN_CKPT.mkdir(parents=True, exist_ok=True)
 
     model = YOLO(args.base)
     model.train(
@@ -126,6 +125,10 @@ def main() -> None:
     print(f"[{args.mode}] mAP50-95 (mask): {metrics.seg.map:.4f}")
     print(f"[{args.mode}] Weights: {best}")
     print(f"[{args.mode}] To deploy: cp {best} {cfg['deploy']}")
+    # Keep training/checkpoints mirrors for labeling predict/flag tools
+    if args.mode != "logo":
+        mirror = _TRAIN_CKPT / Path(cfg["deploy"]).name
+        print(f"[{args.mode}] Also mirror for labeling: cp {best} {mirror}")
 
 
 if __name__ == "__main__":

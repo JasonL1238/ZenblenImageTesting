@@ -1,0 +1,12 @@
+opencv-python>=4.8
+numpy>=1.24
+torch>=2.0
+pyyaml>=6.0
+ultralytics>=8.0
+
+# Labeling UI
+flask>=3.0
+requests>=2.31
+
+# Dev
+pytest>=7.0

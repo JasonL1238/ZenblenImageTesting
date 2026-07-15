@@ -1,0 +1,5 @@
+opencv-python>=4.8
+numpy>=1.24
+ultralytics>=8.0
+# Install JetPack-matched torch separately on the Nano (do not pip torch from PyPI).
+pyyaml>=6.0

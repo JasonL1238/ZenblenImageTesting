@@ -1,40 +1,30 @@
 # Zenblen Image Testing
 
-Computer-vision pipeline for scoring smoothie **blendedness** — how uniformly ingredients are mixed inside the container.
+Two top-level folders only:
 
-## Quick start
+| Folder | Purpose |
+|--------|---------|
+| `active_pipeline/` | Deployable YOLO runtime (blend/chunk + spill) + weights |
+| `training/` | Labeling UI, datasets, `train_multi.py`, training runs |
 
-```bash
-# Single image
-python run.py --pipeline classical --image data/images/test.jpg
-
-# Batch (directory)
-python run.py --pipeline classical --image data/images/ --threshold 0.90
-```
-
-## Pipeline
-
-The **classical** CV pipeline scores blendedness by finding unblended chunks
-inside the container. Container detection (ROI) uses a fine-tuned YOLO11n-seg
-model as the priority detector with a classical colour-threshold fallback.
-Chunk detection uses a trained YOLO chunk model with classical local-deviation
-as fallback. See `CLAUDE.md` for the design.
-
-Labeling + training live under `labeling/` and `training/train_multi.py`.
-
-## Outputs
-
-Each run writes to `outputs/<timestamp>__<pipeline>/`:
-
-- `README.md` — summary and failures
-- `comparison.csv` — per-image scores
-- `run_info.json` — full run metadata
-- `<shade>/` — mask and ROI overlays per image
-
-Pass/fail is `blend_score >= threshold` (default 0.90).
-
-## Tests
+## Runtime (Jetson / inference)
 
 ```bash
-pytest smoothie_cv/tests/test_pipeline.py::TestClassicalCVPipeline -v
+cd active_pipeline
+python run.py --pipeline blend --image <img.jpg>
+python run.py --pipeline spill --image <img.jpg>
 ```
+
+## Label + train
+
+```bash
+cd training
+python labeling/app_multi.py
+python labeling/export_multi.py --mode chunk
+/opt/miniconda3/bin/python train_multi.py --mode chunk
+# deploy:
+cp runs/chunk-seg/<run>/weights/best.pt ../active_pipeline/checkpoints/yolo_chunk_seg.pt
+cp runs/chunk-seg/<run>/weights/best.pt checkpoints/yolo_chunk_seg.pt   # labeling mirror
+```
+
+Logo weights stay under `training/checkpoints/` (not shipped in `active_pipeline`).
