@@ -2,11 +2,11 @@
 
 Re-runs the deviation detector's component loop with full per-component logging:
 which components exist after thresholding/exclusions, which path (compact/dark/
-chroma) accepted each, and what the logo text-line detector saw. Defaults to the
-active YOLO ROI; --roi both compares SAM vs YOLO side by side.
+chroma) accepted each, and what the logo text-line detector saw. Uses the
+cached YOLO ROI by default.
 
 Usage:
-  /opt/miniconda3/bin/python scripts/debug_chunk_paths.py <stem-prefix> [--roi yolo|sam|both]
+  /opt/miniconda3/bin/python scripts/debug_chunk_paths.py <stem-prefix>
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from smoothie_cv.config import Config
 from smoothie_cv.pipelines.classical_cv import ClassicalCVPipeline
 from smoothie_cv.roi import crop_to_roi
 
-SAM_CACHE = Path("outputs/roi_cache_sam")
 YOLO_CACHE = Path("outputs/roi_cache_yolo")
 
 
@@ -214,7 +213,8 @@ def trace(image: np.ndarray, roi_mask: np.ndarray, cfg: Config, tag: str,
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("stem")
-    ap.add_argument("--roi", default="yolo", choices=["sam", "yolo", "both"])
+    ap.add_argument("--roi-cache", default=str(YOLO_CACHE),
+                    help="Directory of cached YOLO ROI masks (default: outputs/roi_cache_yolo)")
     args = ap.parse_args()
 
     imgs = sorted(Path("data/images").rglob("*.jpg"))
@@ -227,14 +227,12 @@ def main() -> None:
     cfg = Config()
     out_dir = Path("outputs/debug_chunks") / p.stem[:17]
 
-    for tag, cache in [("sam", SAM_CACHE), ("yolo", YOLO_CACHE)]:
-        if args.roi not in (tag, "both"):
-            continue
-        rp = cache / f"{p.stem}.png"
-        if not rp.exists():
-            print(f"({tag} ROI not cached, skip)"); continue
-        roi_mask = cv2.imread(str(rp), cv2.IMREAD_GRAYSCALE)
-        trace(img, roi_mask, cfg, tag, out_dir)
+    cache = Path(args.roi_cache)
+    rp = cache / f"{p.stem}.png"
+    if not rp.exists():
+        print(f"(ROI not cached at {rp}, skip)"); sys.exit(1)
+    roi_mask = cv2.imread(str(rp), cv2.IMREAD_GRAYSCALE)
+    trace(img, roi_mask, cfg, "yolo", out_dir)
 
 
 if __name__ == "__main__":

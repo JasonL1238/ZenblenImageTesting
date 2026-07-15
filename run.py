@@ -327,11 +327,10 @@ def main() -> None:
                         help="Path to config.yaml (optional)")
     parser.add_argument("--output-dir", default=None,
                         help="Directory to write outputs (default: outputs/)")
-    parser.add_argument("--detector", choices=["auto", "yolo", "sam", "classical"],
+    parser.add_argument("--detector", choices=["auto", "yolo", "classical"],
                         default="auto",
                         help="ROI detector. 'auto' = YOLO priority, classical fallback "
-                             "(default). 'yolo'/'sam'/'classical' force one "
-                             "(sam is legacy/reference).")
+                             "(default). 'yolo'/'classical' force one.")
     parser.add_argument("--chunk-detector", choices=["auto", "yolo", "classical"],
                         default="auto",
                         help="Chunk detector. 'auto' = YOLO priority, classical "

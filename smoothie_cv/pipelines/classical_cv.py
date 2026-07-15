@@ -77,7 +77,7 @@ class ClassicalCVPipeline(BlendPipeline):
     # ── Path 5: below-ROI cream-on-gasket band ──────────────────────────────────
     def _bottom_cream_band(self, image: np.ndarray, roi_mask: np.ndarray) -> np.ndarray | None:
         """Detect a thin unblended cream layer sitting on the gasket just BELOW the
-        ROI (where SAM cut above it). Returns a full-frame mask of the band, or None.
+        ROI. Returns a full-frame mask of the band, or None.
 
         Scans the central columns from y_bot downward for a contiguous run of bright,
         slightly-warm low-chroma rows (cream) bounded below by the dark gasket. The

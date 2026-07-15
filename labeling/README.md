@@ -41,8 +41,7 @@ cp runs/spill-seg/spill-nano-v1/weights/best.pt checkpoints/yolo_spill_seg.pt
 ```
 
 Data lives in the shared `labels.db` (additive `annotations` / `mode_status`
-tables). One-time merge of old labels already done via
-`migrate_labels_to_multi.py`.
+tables).
 
 ---
 
@@ -132,10 +131,7 @@ false-flagged; keep the threshold low (default 0.25 = any detection).
 
 ---
 
-## Shared data-prep stages — `download.py` / `run_sam.py`
-
-Both feed the labeler above. Run from the **repo root** (SAM resolves
-`checkpoints/` relative to cwd, so the wrong directory raises FileNotFoundError).
+## Shared data-prep — `download.py` / optional chunk seeds
 
 ```bash
 # 1. Download every image/jpg in a time range (start NARROW to test).
@@ -143,18 +139,13 @@ python labeling/download.py --start '2026-06-29 00:00:00' --end '2026-06-30 00:0
 #    optional: --category CleanDone   --type image/jpg   --list-only
 #    -> labeling/data/images/<file_id>.jpg   (+ files table in labels.db)
 
-# 2. Run SAM to seed candidate polygons (conda env — needs torch + sam2 + a
-#    checkpoint in checkpoints/; see CLAUDE.md). --limit N for a quick batch.
-/opt/miniconda3/bin/python labeling/run_sam.py --limit 20
-#    -> data/masks_sam/*.png + data/polygons_sam/*.json
+# 2. Optional: seed chunk-mode candidates (classical/YOLO chunk detector).
+/opt/miniconda3/bin/python labeling/run_chunk_seed.py --limit 20
+#    -> data/polygons_chunk_seed/*.json
 ```
 
 The API key goes in `.env` at repo root (git-ignored): `ZENBLEN_API_KEY=...`.
-The expensive SAM pass runs once, offline; `app_multi.py` then serves the
-precomputed candidates so labeling stays fast.
 
-> **Note.** The old single-mode SAM labeling UI (`app.py` / `export.py` and the
-> `label.html` / `label.js` frontend) was removed on 2026-07-10 — fully
-> superseded by `app_multi.py`. Its `labels` table remains in `labels.db` as a
-> frozen backup; the migration into the multi-mode tables was done once via
-> `migrate_labels_to_multi.py`.
+Standard / spill / logo modes are free-draw (or use `predict_batch.py` +
+`app_review.py` for model-assisted labeling). Chunk mode optionally loads seeds
+from `run_chunk_seed.py`.

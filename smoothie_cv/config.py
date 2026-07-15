@@ -81,7 +81,7 @@ class Config:
     dev_relaxed_top_frac: float = 0.18  # DARK-path components must have their centroid below
                                         # this fraction of ROI height. The meniscus SHADOW band
                                         # hangs just below the foam cut (0.16) and fires the dark
-                                        # path when the ROI's top geometry shifts (YOLO vs SAM);
+                                        # path when the ROI's top geometry shifts;
                                         # measured real dark chunks sit at y_frac ≥ 0.29 — same
                                         # finding that set the foam cut ("real chunks sit at
                                         # y_frac≥0.18"). NOT applied to the chroma path: a real
@@ -269,15 +269,12 @@ class Config:
                                               # 1–2 row dip that pulls the drop metric high even
                                               # though most rows are still chromatic.
     # ── Path 5: below-ROI cream-on-gasket band ───────────────────────────────
-    # SAM often cuts the ROI cleanly ABOVE a thin unblended cream layer that sits
-    # on the holder gasket (e.g. 749a). Path 4 never sees it (cream is below y_bot)
-    # and global gasket-extend is too destabilising (perturbs the adaptive
-    # threshold → 20 verdict flips on unrelated borderline cups, 0 target recovery).
-    # Instead, scan the CENTRAL columns just below y_bot for a bright, slightly-warm
-    # low-chroma band bounded below by the dark gasket — the cream signature. When
-    # it fires, extend the ROI down over that band and flag it. Because the scan is
-    # gated on the cream signature, only genuine-cream cups are touched; every other
-    # ROI is byte-identical → zero churn (unlike global extend).
+    # Thin unblended cream can sit just BELOW the ROI on the holder gasket
+    # (e.g. 749a). Path 4 never sees it (cream is below y_bot). Scan the CENTRAL
+    # columns just below y_bot for a bright, slightly-warm low-chroma band bounded
+    # below by the dark gasket — the cream signature. When it fires, extend the ROI
+    # down over that band and flag it. Gated on the cream signature → only
+    # genuine-cream cups change (zero churn on clean cups).
     #
     # The chroma WINDOW is the key discriminator: real cream is a warm off-white
     # (ch≈8–11), while the look-alikes below the ROI are near-neutral and excluded —
@@ -373,18 +370,15 @@ class Config:
     # Order detectors are tried in. The fine-tuned YOLO-seg model is the priority
     # detector (trained on our own smoothie-only labels, reaches the true cup
     # bottom); classical colour-thresholding is the fallback, used only when YOLO
-    # is unavailable or returns no plausible mask. SAM2 is registered but phased
-    # out of the default order — force with prefer="sam" / --detector sam.
+    # is unavailable or returns no plausible mask.
     detector_priority: list[str] = field(default_factory=lambda: ["yolo", "classical"])
 
     # --- YOLO-seg (container detection, PRIORITY) ---
-    # Deployed weights. After retraining (training/train.py), promote the new run:
-    #   cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
-    # yolo_standard_seg.pt is the multi-mode-pipeline container detector (the
-    # "standard" labeler mode), promoted 2026-07-14 over the older nano-v5
-    # yolo_smoothie_seg.pt. NOTE: switching the container model shifts ROIs and
-    # can re-flip borderline chunk verdicts (see the ROI-destabilises-threshold
-    # note in CLAUDE.md) — always re-run scripts/validate_chunks.py after a change.
+    # Deployed weights. After retraining (training/train_multi.py --mode standard),
+    # promote the new run:
+    #   cp runs/standard-seg/<run>/weights/best.pt checkpoints/yolo_standard_seg.pt
+    # NOTE: switching the container model shifts ROIs and can re-flip borderline
+    # chunk verdicts — always re-run scripts/validate_chunks.py after a change.
     yolo_weights: Path = field(
         default_factory=lambda: Path("checkpoints/yolo_standard_seg.pt"))
 
@@ -411,47 +405,6 @@ class Config:
     # clipped letter sits almost entirely inside (→ rejected). Raise toward
     # 0.6–0.7 if the A/B eval shows a real chunk lost to a letter it overlaps.
     dev_logo_yolo_overlap: float = 0.5
-
-    # --- SAM2 (container detection, LEGACY/reference) ---
-    sam_model: str = "sam2_hiera_tiny"   # tiny preferred for Jetson compatibility
-    # Top-edge prior policy. The RAW SAM mask is the primary output; the
-    # straight-line top prior (flatten_roi_top) is applied ONLY when the raw
-    # mask's top edge is too jagged — i.e. a "weird" mask whose ragged rim would
-    # otherwise drag the foam/meniscus band into the ROI and fire the chunk
-    # detector. Flatten iff top_edge_roughness(raw) > sam_top_roughness_max.
-    # 2.5 px: below this the raw top is clean enough to keep as-is; above it the
-    # rim is squiggly enough to need straightening. (A blunt single-metric gate —
-    # roughness can't perfectly separate every misfire, so ~2 faint foam FPs may
-    # leak vs. always-flatten; the trade is that most masks keep their true,
-    # un-straightened surface geometry.)
-    sam_top_roughness_max: float = 2.5
-    # Side-wall refinement: median-smooth the per-row left/right walls over this
-    # fraction of the cup height to straighten ragged sides (logo-text scallops,
-    # low-confidence jitter on dark fills) that otherwise drag thin dark slivers
-    # into the ROI and misfire the chunk detector. Robust median => a clean wall is
-    # unchanged and it never extends past the true wall. 0 disables.
-    sam_side_refine_win: float = 0.06
-    # Fixed-rig bottom prior (DISABLED by default — see why below). On dark fills
-    # SAM stops mid-cup where the smoothie blends into the shadowed holder, leaving
-    # a big bottom chunk outside the ROI (the cup then scores falsely clean, e.g.
-    # 50e294/749a). `extend_roi_to_gasket` extends the ROI down to the dark holder
-    # gasket, gated on finding that gasket so correctly-segmented cups are untouched.
-    # It is geometrically CORRECT (verified: it reaches the gasket and re-includes
-    # the cream mass on 50e294/749a, and is a no-op on cups already at their true
-    # bottom). BUT enabling it does NOT fix the false-clean and REGRESSES the set:
-    #   1. The lower cream mass is LARGER than the local-deviation base-blur kernel
-    #      (dev_blur_kernel=121), so the masked blur adapts *to the cream* → its
-    #      ΔE ≈ 0 and it is invisible to the detector regardless of ROI (confirmed
-    #      even with the bright-neutral exclusion off). Detecting it needs a
-    #      different sensor (global/region model or a smaller adaptive base), not a
-    #      bigger ROI.
-    #   2. Enlarging the ROI with the bright bottom band shifts the per-image
-    #      adaptive threshold (mean+k·σ of ΔE), which flipped 18 cups and ERASED
-    #      genuine detections elsewhere (incl. the cf4d chunk-extent fix).
-    # Kept behind this flag (correct, reusable) for if/when the chunk detector is
-    # made ROI-composition-robust. Set sam_bottom_extend_frac>0 to enable.
-    sam_bottom_extend_frac: float = 0.0
-    sam_gasket_dark_drop: float = 0.55
 
     # --- YOLO-seg SPILL detection (separate pipeline) ---
     # A trained "spill" seg model (training/train_multi.py --mode spill →

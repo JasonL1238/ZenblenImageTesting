@@ -15,7 +15,7 @@ debug_outputs/
 .venv/
 
 # ---------------------------------------------------------------------------
-# Raw images & SAM caches — NOT pushed (re-download / regenerate locally).
+# Raw images — NOT pushed (re-download locally).
 # Training annotations + YOLO exports ARE tracked (see below).
 # ---------------------------------------------------------------------------
 labeling/data/
@@ -35,8 +35,7 @@ checkpoints/*.bak*
 
 # ---------------------------------------------------------------------------
 # Weights: ignore .pt by default, then allow YOLO deploy + training runs.
-# SAM2 (~149 MB) stays ignored — over GitHub's 100 MB file limit; download
-# separately (see CLAUDE.md). Base yolo11n-seg.pt auto-downloads via ultralytics.
+# Base yolo11n-seg.pt auto-downloads via ultralytics.
 # ---------------------------------------------------------------------------
 *.pt
 !checkpoints/yolo_*.pt

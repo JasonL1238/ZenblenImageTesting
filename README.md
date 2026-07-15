@@ -16,10 +16,11 @@ python run.py --pipeline classical --image data/images/ --threshold 0.90
 
 The **classical** CV pipeline scores blendedness by finding unblended chunks
 inside the container. Container detection (ROI) uses a fine-tuned YOLO11n-seg
-model (`checkpoints/yolo_smoothie_seg.pt`, trained on our own labels via
-`labeling/` + `training/train.py`) as the priority detector with a classical
-colour-threshold fallback; SAM2 is kept as a legacy reference detector — see
-`CLAUDE.md` for the detection and chunk-detection design.
+model as the priority detector with a classical colour-threshold fallback.
+Chunk detection uses a trained YOLO chunk model with classical local-deviation
+as fallback. See `CLAUDE.md` for the design.
+
+Labeling + training live under `labeling/` and `training/train_multi.py`.
 
 ## Outputs
 

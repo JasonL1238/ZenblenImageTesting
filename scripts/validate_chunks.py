@@ -2,8 +2,7 @@
 
 ROIs come from the cached YOLO-seg masks by default (fast + deterministic —
 build with scripts/cache_yolo_rois.py). Pass --live to run the model instead,
-or --roi-cache to use another cache (e.g. outputs/roi_cache_sam for the legacy
-SAM reference).
+or --roi-cache to point at another YOLO ROI cache.
 
 Verdicts are diffed against the previous report's scores.csv (--baseline) so
 every run reports exactly what flipped — new flags, lost flags.
@@ -17,7 +16,6 @@ Outputs (under --out, default outputs/report/):
 Usage:
   /opt/miniconda3/bin/python scripts/validate_chunks.py
   /opt/miniconda3/bin/python scripts/validate_chunks.py --live --weights runs/smoothie-seg/nano-v4/weights/best.pt --out outputs/report_v4
-  /opt/miniconda3/bin/python scripts/validate_chunks.py --roi-cache outputs/roi_cache_sam --out outputs/report_sam
 """
 from __future__ import annotations
 

@@ -190,11 +190,10 @@ def import_from_labeling_db(
 ) -> Master:
     """Bridge the existing SQLite labeling tool (`labeling/labels.db`) into a master.
 
-    Reads polygons for the given verdicts. For 'corrected' rows the human-edited
-    polygon (stored on the label row) wins; for 'good' rows the accepted SAM
-    polygon from ``labeling/data/polygons_sam/<id>.json`` is used. Each labeled
+    Reads polygons stored on label rows for the given verdicts. Each labeled
     image becomes a master image with one smoothie annotation (an empty/degenerate
-    polygon yields a negative image).
+    polygon yields a negative image). Prefer the multi-mode exporter
+    (``labeling/export_multi.py``) for new standard-mode datasets.
     """
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -209,8 +208,6 @@ def import_from_labeling_db(
     ).fetchall()
     conn.close()
 
-    # SAM polygons live next to the images dir in the labeling package layout.
-    poly_dir = source_images_dir.parent / "polygons_sam"
     master = Master()
 
     for r in rows:
@@ -221,16 +218,9 @@ def import_from_labeling_db(
             continue
 
         points: list[list[float]] | None = None
-        w = h = None
-        sam_json = poly_dir / f"{fid}.json"
-        if sam_json.exists():
-            sam = json.loads(sam_json.read_text())
-            w, h = int(sam["width"]), int(sam["height"])
-            points = sam.get("points")
-        if r["verdict"] == "corrected" and r["polygon"]:
+        if r["polygon"]:
             points = json.loads(r["polygon"])
-        if w is None or h is None:
-            w, h = _read_image_size(img_path)
+        w, h = _read_image_size(img_path)
 
         image_id = fid
         master.images.append({

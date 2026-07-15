@@ -16,8 +16,9 @@ Switching mode keeps the CURRENT image and loads that image's annotations for
 the new mode, so one source image can be segmented separately in each mode.
 Export per mode with ``export_multi.py``.
 
-Run (no torch needed — free-draw; SAM seeds standard mode, the classical
-detector seeds chunk mode, both only if a candidate is on disk):
+Run (no torch needed — free-draw; classical/YOLO chunk seeds load when present
+on disk from ``run_chunk_seed.py``; standard/spill/logo use free-draw or
+model-assisted review via ``predict_batch.py`` + ``app_review.py``):
   python labeling/app_multi.py            # http://127.0.0.1:5001
 """
 from __future__ import annotations
@@ -55,22 +56,12 @@ def image(file_id: int):
     return send_file(str(path), mimetype="image/jpeg")
 
 
-@app.route("/api/sam/<int:file_id>")
-def api_sam(file_id: int):
-    """Optional SAM candidate polygon (standard mode seed). {} if none on disk."""
-    p = db.POLYGONS_DIR / f"{file_id}.json"
-    if not p.exists():
-        return jsonify({})
-    data = json.loads(p.read_text())
-    return jsonify({"polygon": data.get("points", [])})
-
-
 @app.route("/api/chunk_seed/<int:file_id>")
 def api_chunk_seed(file_id: int):
-    """Optional classical-detector candidate shapes (chunk mode seed).
+    """Optional classical/YOLO candidate shapes (chunk mode seed).
 
-    {} if none on disk (run labeling/run_chunk_seed.py first). Multi-shape,
-    unlike /api/sam — a chunk mask can hold several disjoint lumps."""
+    {} if none on disk (run labeling/run_chunk_seed.py first). Multi-shape —
+    a chunk mask can hold several disjoint lumps."""
     p = db.CHUNK_SEED_DIR / f"{file_id}.json"
     if not p.exists():
         return jsonify({})
@@ -132,8 +123,8 @@ def _priority_ids(mode: str) -> list[int]:
 def api_next():
     """First downloaded image with NO decision yet in ``mode``.
 
-    Unlike the container tool this does NOT require a SAM polygon on disk —
-    spill/logo are free-drawn. ``?after=<id>`` steps forward past a given id.
+    Free-draw for all modes (no seed required). ``?after=<id>`` steps forward
+    past a given id.
 
     If ``labeling/priority/<mode>.txt`` exists, undecided ids listed there are
     served first (in file order), then the normal ascending file_id walk.

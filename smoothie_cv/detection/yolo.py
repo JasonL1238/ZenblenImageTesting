@@ -2,18 +2,15 @@
 YOLO-seg container detection — the PRIORITY detector.
 
 A YOLO11n-seg model fine-tuned on our own labelled cups (see the labeling/ tool
-and dataset_tools/ export pipeline) segments the smoothie liquid directly —
-smoothie-only masks, foam excluded, per the locked labeling standard. Unlike
-SAM2 (which segments generic *objectness* and needs the fixed-prompt trickery
-plus top-flatten/side-refine priors to carve the liquid out of the cup), the
-trained model has learned exactly the region we care about, reaches the true
-cup bottom (gasket-complete masks that made Path 6 viable), and runs a 6 MB
-nano network instead of a SAM2 checkpoint.
+and export pipeline) segments the smoothie liquid directly — smoothie-only
+masks, foam excluded, per the locked labeling standard. The trained model has
+learned exactly the region we care about, reaches the true cup bottom
+(gasket-complete masks that made Path 6 viable), and runs a 6 MB nano network.
 
-Weights: ``config.yolo_weights`` (default ``checkpoints/yolo_smoothie_seg.pt``).
-After retraining (``training/train.py``), promote the new run's ``best.pt`` there:
+Weights: ``config.yolo_weights`` (default ``checkpoints/yolo_standard_seg.pt``).
+After retraining (``training/train_multi.py --mode standard``), promote:
 
-    cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
+    cp runs/standard-seg/<run>/weights/best.pt checkpoints/yolo_standard_seg.pt
 
 Returns the standard detector contract:
   (roi_mask: HxW uint8 with 255 inside the smoothie, bbox: (x, y, w, h) or None).

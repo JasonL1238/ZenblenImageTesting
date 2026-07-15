@@ -10,7 +10,6 @@ Prereqs:
 Each run saves to runs/smoothie-seg/<name>/weights/{best,last}.pt
 
 After training, evaluate then PROMOTE the weights into the live pipeline:
-    python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/<name>/weights/best.pt
     cp runs/smoothie-seg/<name>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
     rm -rf outputs/roi_cache_yolo && python scripts/cache_yolo_rois.py
     python scripts/validate_chunks.py      # re-validate all 92 before trusting it

@@ -2,16 +2,11 @@ opencv-python>=4.8
 numpy>=1.24
 torch>=2.0
 pyyaml>=6.0
+ultralytics>=8.0
 
-# Labeling tool (labeling/): Files-API client + local web UI. No torch needed
-# for the UI, so these can live in a plain venv while SAM runs in conda.
+# Labeling tool (labeling/): Files-API client + local web UI.
 flask>=3.0
 requests>=2.31
-
-# SAM2 (container detection) — install from source (no stable PyPI release):
-# pip install 'git+https://github.com/facebookresearch/segment-anything-2.git'
-# Then download a checkpoint into checkpoints/:
-#   wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -P checkpoints/
 
 # Dataset pipeline (dataset_tools/ + dataset_pipeline.py): master -> YOLO/semantic/COCO.
 # opencv-python + numpy + pyyaml (above) already cover the core; these add UX/extras.

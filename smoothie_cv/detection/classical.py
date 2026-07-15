@@ -22,9 +22,10 @@ All branches apply a spatial crop (configurable margins) to exclude blender
 side panels and motor base before colour analysis, then translate back.
 
 This detector keys on colour, so it is fragile across shades (it can miss
-tan/pale fills and occasionally bleeds onto the machine deck) — which is why the
-SAM detector in ``sam.py`` is preferred. Shared geometry/colour helpers live in
-``common.py``; the SAM→classical dispatcher lives in ``__init__.py``.
+tan/pale fills and occasionally bleeds onto the machine deck) — which is why
+YOLO-seg is the priority detector and classical is the fallback. Shared
+geometry/colour helpers live in ``common.py``; the YOLO→classical dispatcher
+lives in ``__init__.py``.
 
 Returns a filled binary mask (255 inside the smoothie region, 0 outside) at the
 same resolution as the input image, plus a bounding box (x, y, w, h) or None.

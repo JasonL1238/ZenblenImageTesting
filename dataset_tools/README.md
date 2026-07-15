@@ -145,9 +145,12 @@ Each export directory is rebuilt from scratch, so stale files never linger.
 
 ## Training after export
 
-Runnable starting points live in [`training_examples/`](training_examples/):
+Prefer the multi-mode trainer for live weights:
 
-- `train_yolo_seg.py` — Ultralytics YOLO11-seg on `exports/yolo_seg/data.yaml`
-- `train_semantic_segformer.py` — image+mask pairs for SegFormer/DeepLab/U-Net/…
-- `train_coco_detectron2.py` — Mask R-CNN on the COCO export (also MMDet/Mask2Former)
+```bash
+/opt/miniconda3/bin/python training/train_multi.py --mode standard
 ```
+
+A YOLO-seg starter also lives in [`training_examples/train_yolo_seg.py`](training_examples/train_yolo_seg.py)
+(Ultralytics on `exports/yolo_seg/data.yaml`). For the older smoothie_dataset
+path see `training/train.py`.

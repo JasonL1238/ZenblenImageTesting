@@ -1,12 +1,7 @@
 """Shared SQLite helpers for the labeling tool.
 
-One database (``labeling/labels.db``) holds two tables:
-
-  files   — one row per downloaded image (populated by ``download.py``)
-  labels  — one row per human verdict (populated by ``app.py``)
-
-Both are keyed by ``file_id`` (the Files-API file id, an integer PK), so the
-download / SAM / label / export stages all join cleanly on that id.
+One database (``labeling/labels.db``) holds image registry + multi-mode
+annotations, keyed by ``file_id`` (the Files-API file id, an integer PK).
 """
 from __future__ import annotations
 
@@ -18,8 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DB_PATH = ROOT / "labels.db"
 IMAGES_DIR = ROOT / "data" / "images"
-MASKS_DIR = ROOT / "data" / "masks_sam"
-POLYGONS_DIR = ROOT / "data" / "polygons_sam"
 CHUNK_SEED_DIR = ROOT / "data" / "polygons_chunk_seed"
 DATASET_DIR = ROOT / "dataset"
 
@@ -206,5 +199,5 @@ def load_dotenv() -> None:
 
 def ensure_dirs() -> None:
     """Create the on-disk data directories used by the pipeline stages."""
-    for d in (IMAGES_DIR, MASKS_DIR, POLYGONS_DIR, CHUNK_SEED_DIR):
+    for d in (IMAGES_DIR, CHUNK_SEED_DIR):
         d.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@
 // the canvas backing store is the natural image size and CSS scales it to fit.
 
 const MODES = {
-  standard: { name: "MODE 1 · STANDARD (in-cup)", dataset: "→ standard_dataset", color: "#39c07a", seedEndpoint: "/api/sam"        },
+  standard: { name: "MODE 1 · STANDARD (in-cup)", dataset: "→ standard_dataset", color: "#39c07a", seedEndpoint: null              },
   spill:    { name: "MODE 2 · SPILLED SMOOTHIE",   dataset: "→ spill_dataset",    color: "#e8833a", seedEndpoint: null              },
   logo:     { name: "MODE 3 · LOGO",               dataset: "→ logo_dataset",     color: "#a06cd5", seedEndpoint: null              },
   chunk:    { name: "MODE 4 · CHUNK (unblended)",  dataset: "→ chunk_dataset",    color: "#e0524a", seedEndpoint: "/api/chunk_seed" },
@@ -314,8 +314,7 @@ function setItem(d) {
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
     // Seed this mode from its candidate endpoint if we have no shapes yet
-    // (SAM for standard — single polygon; the classical chunk detector for
-    // chunk — possibly several disjoint lump shapes).
+    // (chunk mode: classical/YOLO seeds from run_chunk_seed.py).
     if (MODES[mode].seedEndpoint && !status && shapes.every((p) => !p.length)) {
       fetch(`${MODES[mode].seedEndpoint}/${d.file_id}`).then((r) => r.json()).then((s) => {
         if (s.shapes && s.shapes.length) {

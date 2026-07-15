@@ -6,17 +6,13 @@
 - Run classical:    `python run.py --pipeline classical --image <img.jpg>`
 - Batch:            `python run.py --pipeline classical --image data/images/ --threshold 0.90`
 
-Classical is the only analysis pipeline; the VLM and SAM *analysis* pipelines
-were removed. A fine-tuned YOLO-seg model is the priority CONTAINER detector;
-SAM2 is phased out of the pipeline but kept as the training-free reference.
+Classical is the only analysis pipeline. A fine-tuned YOLO-seg model is the
+priority CONTAINER detector; classical colour-thresholding is the fallback.
 
 # Container detection (ROI)
 - The fine-tuned YOLO11n-seg model is the PRIORITY detector (trained on our own
   smoothie-only labels — foam excluded, reaches the true cup bottom, 6 MB nano
-  net). Classical colour-thresholding is the FALLBACK. SAM2 is LEGACY: kept in
-  the codebase (needs no training data → independent reference for evaluating
-  newly trained models, and the labeling tool's bootstrap segmenter) but NOT in
-  the default priority.
+  net). Classical colour-thresholding is the FALLBACK.
 - Single entry point: `from smoothie_cv.detection import detect_container`. It
   dispatches in `config.detector_priority` order (default `["yolo", "classical"]`),
   falling back when a detector is unavailable or returns no plausible mask.
@@ -25,19 +21,19 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
   - `yolo.py`      → `detect_yolo()`       — fine-tuned YOLO-seg [PRIORITY]; also
                      `get_yolo_roi()` + `fill_holes()` used by the scripts
   - `classical.py` → `detect_classical()`  — colour-threshold + flatten [FALLBACK]
-  - `sam.py`       → `detect_sam()`        — SAM2 fixed-prompt detector [LEGACY]
   - `common.py`    → shared helpers (classify, `flatten_roi_top`, `top_edge_roughness`, overlay)
-- Force one: `detect_container(img, prefer="sam")`, or `run.py --detector yolo|sam|classical`
+  - `chunk.py` / `chunk_yolo.py` → unblended-chunk YOLO (+ classical fallback)
+  - `logo.py` / `spill.py` → logo FP suppress + spill pipeline
+- Force one: `detect_container(img, prefer="yolo")`, or `run.py --detector yolo|classical`
   (default `auto` = priority order).
-- Deployed weights: `checkpoints/yolo_smoothie_seg.pt` (`config.yolo_weights`).
-  Train → deploy loop (see training/train.py docstring):
-  1. label in `labeling/`, export via `python dataset_pipeline.py export-all`
-  2. `/opt/miniconda3/bin/python training/train.py` (bump RUN_NAME first)
-  3. sanity-check masks vs the SAM reference:
-     `python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/<run>/weights/best.pt`
-  4. `cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt`
-  5. `rm -rf outputs/roi_cache_yolo && python scripts/cache_yolo_rois.py`
-  6. `python scripts/validate_chunks.py` — MUST re-validate all 92 (ROI changes
+- Deployed weights: `checkpoints/yolo_standard_seg.pt` / `yolo_smoothie_seg.pt`
+  (`config.yolo_weights`). Prefer `training/train_multi.py --mode standard`.
+  Train → deploy loop:
+  1. label in `labeling/`, export via `python labeling/export_multi.py --mode standard`
+  2. `/opt/miniconda3/bin/python training/train_multi.py --mode standard` (bump name)
+  3. `cp runs/standard-seg/<run>/weights/best.pt checkpoints/yolo_standard_seg.pt`
+  4. `rm -rf outputs/roi_cache_yolo && python scripts/cache_yolo_rois.py`
+  5. `python scripts/validate_chunks.py` — MUST re-validate all 92 (ROI changes
      shift the adaptive chunk threshold and flip verdicts).
 
 # Unblended-chunk detection (inside ROI)
@@ -134,12 +130,9 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
       Drop-based logic fires on 38/92 images (natural gradient); absolute ceiling fires
       on 1 (50e294 with cream mass fully inside the ROI).
   Net on the 92-image set: 30→31 flagged (+1: 50e294 correctly recovered).
-- PATH 5 (below-ROI cream-on-gasket band) — recovers thin cream layers that SAM cut
-  ABOVE, so the cream sits just BELOW y_bot and Path 4 never sees it (e.g. 749a).
-  Global gasket-extend was rejected first: enabling `sam_bottom_extend_frac` perturbs the
-  per-ROI adaptive threshold and flips 20 unrelated borderline cups (10 gain / 10 lose,
-  net 0) while recovering NONE of the targets — measured, see `[[bottom-cream-...]]`.
-  Instead, scan the CENTRAL columns (`dev_botband_inset`) just below y_bot for a bright,
+- PATH 5 (below-ROI cream-on-gasket band) — recovers thin cream layers that sit
+  just BELOW y_bot so Path 4 never sees them (e.g. 749a). Scan the CENTRAL
+  columns (`dev_botband_inset`) just below y_bot for a bright,
   slightly-warm low-chroma band bounded below by the dark gasket — the cream signature.
   When it fires, extend the ROI over that band and flag it; because the scan is gated on
   the signature, only genuine-cream cups change → ZERO churn (unlike global extend).
@@ -209,13 +202,12 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
   unanalyzable: cup behind frost/condensation — capture QA issue, both ROIs poor).
 - Validate across the dataset: `python scripts/validate_chunks.py` (uses cached
   YOLO ROIs in `outputs/roi_cache_yolo/`; regenerate with
-  `python scripts/cache_yolo_rois.py`; `--live` runs the model instead; SAM
-  reference cache: `outputs/roi_cache_sam/` via `scripts/cache_sam_rois.py`).
+  `python scripts/cache_yolo_rois.py`; `--live` runs the model instead).
   Writes a clean report to `outputs/report/`: `flagged.png` (flagged smoothies,
   original vs detection side-by-side), `scores.csv`, `README.md`, `overlays/`
   (all 92) — and diffs verdicts vs the previous report (`--baseline`), printing
   new/lost flags. Compare any two runs: `scripts/diff_reports.py a b`.
-  Per-image gate tracing: `scripts/debug_chunk_paths.py <stem> [--roi yolo|sam|both]`
+  Per-image gate tracing: `scripts/debug_chunk_paths.py <stem>`
   (MUST be kept in sync with `_deviation_mask` — it replicates the logic).
 
 # Code style
@@ -230,13 +222,10 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
 - Use a subagent for image analysis and multi-file investigation to keep context lean.
 
 # Gotchas / environment
-- YOLO container detection needs `checkpoints/yolo_smoothie_seg.pt` (gitignored —
-  retrain with `training/train.py` and promote best.pt, or copy from another machine).
-- SAM2 (legacy detector) requires checkpoint files in `checkpoints/` — download separately:
-  `wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -P checkpoints/`
-- SAM2 is installed from source, not PyPI: see `requirements.txt` comments.
+- YOLO container detection needs deployed weights under `checkpoints/yolo_*_seg.pt`
+  (retrain with `training/train_multi.py` and promote best.pt, or copy from another machine).
 - M4 Pro uses MPS backend (`torch.backends.mps`); Jetson Nano falls back to CPU — no CUDA.
-  YOLO-seg TRAINING segfaults on MPS — training/train.py forces CPU.
+  YOLO-seg TRAINING segfaults on MPS — training scripts force CPU.
 - Pipelines implement the `BlendResult` contract (`smoothie_cv/pipelines/base.py`).
 
 # Session health (canary)

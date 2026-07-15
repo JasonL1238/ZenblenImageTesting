@@ -1,6 +1,6 @@
 """Trace Path 4 (bottom absolute-chroma) + reference-band stats for one image.
 
-Usage: /opt/miniconda3/bin/python scripts/debug_bottom.py <stem> [--roi sam|yolo|both]
+Usage: /opt/miniconda3/bin/python scripts/debug_bottom.py <stem>
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from smoothie_cv.config import Config
 from smoothie_cv.roi import crop_to_roi
 
-SAM_CACHE = Path("outputs/roi_cache_sam")
 YOLO_CACHE = Path("outputs/roi_cache_yolo")
 
 
@@ -77,17 +76,21 @@ def trace(image, roi_mask, cfg, tag):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("stem"); ap.add_argument("--roi", default="yolo")
+    ap.add_argument("stem")
+    ap.add_argument("--roi-cache", default=str(YOLO_CACHE),
+                    help="Directory of cached YOLO ROI masks (default: outputs/roi_cache_yolo)")
     args = ap.parse_args()
     match = [p for p in sorted(Path("data/images").rglob("*.jpg")) if args.stem in p.stem]
-    p = match[0]; img = cv2.imread(str(p)); cfg = Config()
+    if not match:
+        print("no image match"); sys.exit(1)
+    p = match[0]
+    img = cv2.imread(str(p))
+    cfg = Config()
     print(f"image: {p.stem[:40]}")
-    for tag, cache in [("sam", SAM_CACHE), ("yolo", YOLO_CACHE)]:
-        if args.roi not in (tag, "both"):
-            continue
-        rp = cache / f"{p.stem}.png"
-        if rp.exists():
-            trace(img, cv2.imread(str(rp), cv2.IMREAD_GRAYSCALE), cfg, tag)
+    rp = Path(args.roi_cache) / f"{p.stem}.png"
+    if not rp.exists():
+        print(f"(ROI not cached at {rp})"); sys.exit(1)
+    trace(img, cv2.imread(str(rp), cv2.IMREAD_GRAYSCALE), cfg, "yolo")
 
 
 if __name__ == "__main__":
