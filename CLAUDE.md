@@ -30,9 +30,9 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
 - Force one: `detect_container(img, prefer="sam")`, or `run.py --detector yolo|sam|classical`
   (default `auto` = priority order).
 - Deployed weights: `checkpoints/yolo_smoothie_seg.pt` (`config.yolo_weights`).
-  Train → deploy loop (see train.py docstring):
+  Train → deploy loop (see training/train.py docstring):
   1. label in `labeling/`, export via `python dataset_pipeline.py export-all`
-  2. `/opt/miniconda3/bin/python train.py` (bump RUN_NAME first)
+  2. `/opt/miniconda3/bin/python training/train.py` (bump RUN_NAME first)
   3. sanity-check masks vs the SAM reference:
      `python scripts/compare_yolo_vs_sam.py --weights runs/smoothie-seg/<run>/weights/best.pt`
   4. `cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt`
@@ -231,12 +231,12 @@ SAM2 is phased out of the pipeline but kept as the training-free reference.
 
 # Gotchas / environment
 - YOLO container detection needs `checkpoints/yolo_smoothie_seg.pt` (gitignored —
-  retrain with `train.py` and promote best.pt, or copy from another machine).
+  retrain with `training/train.py` and promote best.pt, or copy from another machine).
 - SAM2 (legacy detector) requires checkpoint files in `checkpoints/` — download separately:
   `wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_tiny.pt -P checkpoints/`
 - SAM2 is installed from source, not PyPI: see `requirements.txt` comments.
 - M4 Pro uses MPS backend (`torch.backends.mps`); Jetson Nano falls back to CPU — no CUDA.
-  YOLO-seg TRAINING segfaults on MPS — train.py forces CPU.
+  YOLO-seg TRAINING segfaults on MPS — training/train.py forces CPU.
 - Pipelines implement the `BlendResult` contract (`smoothie_cv/pipelines/base.py`).
 
 # Session health (canary)

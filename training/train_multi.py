@@ -1,12 +1,13 @@
 """Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard).
 
 Each mode is its own single-class YOLO11n-seg model, independent of the container
-detector trained by train.py. Same recipe (nano net, CPU — MPS segfaults on
-YOLO-seg), just pointed at the per-mode dataset produced by export_multi.py.
+detector trained by training/train.py. Same recipe (nano net, CPU — MPS segfaults
+on YOLO-seg), just pointed at the per-mode dataset produced by export_multi.py.
 
-End-to-end, once images are labeled in app_multi.py:
-    python labeling/export_multi.py --mode spill        # build the dataset
-    /opt/miniconda3/bin/python train_multi.py --mode spill   # train
+Run from the repo root (all paths below are cwd-relative). End-to-end, once images
+are labeled in app_multi.py:
+    python labeling/export_multi.py --mode spill              # build the dataset
+    /opt/miniconda3/bin/python training/train_multi.py --mode spill   # train
 
 Runs save to runs/<mode>-seg/<name>/weights/{best,last}.pt
 

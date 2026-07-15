@@ -1,7 +1,9 @@
 """Train YOLO-seg container detector.
 
+Run from the repo root (all paths below are cwd-relative):
+
 Prereqs:
-    - Conda base env: /opt/miniconda3/bin/python train.py
+    - Conda base env: /opt/miniconda3/bin/python training/train.py
     - Dataset exported: python dataset_pipeline.py export-all
     - Base checkpoint present: yolo11n-seg.pt (download if missing)
 

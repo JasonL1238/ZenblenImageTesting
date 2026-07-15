@@ -11,7 +11,7 @@ cup bottom (gasket-complete masks that made Path 6 viable), and runs a 6 MB
 nano network instead of a SAM2 checkpoint.
 
 Weights: ``config.yolo_weights`` (default ``checkpoints/yolo_smoothie_seg.pt``).
-After retraining (``train.py``), promote the new run's ``best.pt`` there:
+After retraining (``training/train.py``), promote the new run's ``best.pt`` there:
 
     cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
 
@@ -63,7 +63,7 @@ def _get_model(weights: str):
     if _MODEL is None or _MODEL_WEIGHTS != weights:
         if not Path(weights).exists():
             raise FileNotFoundError(
-                f"YOLO weights not found: {weights} — train with train.py, then "
+                f"YOLO weights not found: {weights} — train with training/train.py, then "
                 f"cp runs/smoothie-seg/<run>/weights/best.pt {weights}"
             )
         from ultralytics import YOLO  # lazy: non-YOLO callers skip the import

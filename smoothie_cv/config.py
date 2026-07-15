@@ -378,13 +378,13 @@ class Config:
     detector_priority: list[str] = field(default_factory=lambda: ["yolo", "classical"])
 
     # --- YOLO-seg (container detection, PRIORITY) ---
-    # Deployed weights. After retraining (train.py), promote the new run:
+    # Deployed weights. After retraining (training/train.py), promote the new run:
     #   cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
     yolo_weights: Path = field(
         default_factory=lambda: Path("checkpoints/yolo_smoothie_seg.pt"))
 
     # --- YOLO-seg LOGO suppression (chunk-detection FP filter, ADDITIVE) ---
-    # A trained "zenblen"-wordmark seg model (train_multi.py --mode logo). When
+    # A trained "zenblen"-wordmark seg model (training/train_multi.py --mode logo). When
     # dev_logo_yolo_suppress is on, detect_logo() produces a full-frame logo mask
     # and any accepted chunk component whose pixel-overlap with it is ≥
     # dev_logo_yolo_overlap is rejected as print footprint. This AUGMENTS the

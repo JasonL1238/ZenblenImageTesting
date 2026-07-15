@@ -2,7 +2,7 @@
 YOLO-seg LOGO detection — a chunk-suppression signal (NOT a container detector).
 
 A YOLO11n-seg model fine-tuned on our own labelled "zenblen" wordmarks (see the
-labeling/ multi-mode tool: ``train_multi.py --mode logo`` →
+labeling/ multi-mode tool: ``training/train_multi.py --mode logo`` →
 ``checkpoints/yolo_logo_seg.pt``). Returns a full-frame mask of the printed logo
 so the classical chunk detector can reject false-positive components that land on
 the wordmark — in particular the CLIPPED-wordmark cases (word partly out of frame
@@ -41,7 +41,7 @@ def _get_logo_model(weights: str):
         if not Path(weights).exists():
             raise FileNotFoundError(
                 f"Logo YOLO weights not found: {weights} — train with "
-                f"train_multi.py --mode logo, then "
+                f"training/train_multi.py --mode logo, then "
                 f"cp runs/logo-seg/<run>/weights/best.pt {weights}"
             )
         from ultralytics import YOLO  # lazy: non-logo callers skip the import
@@ -58,7 +58,7 @@ def detect_logo(image: np.ndarray, config: Config) -> np.ndarray:
     wordmark box would swallow real chunks sitting between the letters)."""
     h, w = image.shape[:2]
     model = _get_logo_model(str(config.logo_weights))
-    # force CPU: YOLO-seg segfaults on MPS (matches train_multi.py / predict_batch.py)
+    # force CPU: YOLO-seg segfaults on MPS (matches training/train_multi.py / predict_batch.py)
     result = model(image, verbose=False, device="cpu", conf=config.logo_conf)[0]
 
     mask = np.zeros((h, w), dtype=np.uint8)

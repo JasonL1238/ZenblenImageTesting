@@ -33,7 +33,7 @@ python labeling/app_multi.py                       # http://127.0.0.1:5001
 python labeling/export_multi.py --mode spill       # or logo / standard / (omit = all)
 
 # 3. Train that mode's YOLO-nano (conda env — MPS segfaults, runs on CPU).
-/opt/miniconda3/bin/python train_multi.py --mode spill
+/opt/miniconda3/bin/python training/train_multi.py --mode spill
 #    -> runs/spill-seg/spill-nano-v1/weights/best.pt   (bump --name each retrain)
 
 # 4. Deploy the weights (path printed at end of training).
@@ -84,7 +84,7 @@ python labeling/app_review.py --mode spill            # http://127.0.0.1:5002
 
 # 3. Export + train exactly as the hand pipeline (approved labels are included):
 python labeling/export_multi.py --mode spill
-/opt/miniconda3/bin/python train_multi.py --mode spill --name spill-nano-v2
+/opt/miniconda3/bin/python training/train_multi.py --mode spill --name spill-nano-v2
 
 # Ablation — prove the pseudo-labels help, not hurt, on the disjoint eval:
 python labeling/export_multi.py --mode spill --source hand   # hand labels only
