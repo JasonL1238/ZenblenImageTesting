@@ -380,8 +380,13 @@ class Config:
     # --- YOLO-seg (container detection, PRIORITY) ---
     # Deployed weights. After retraining (training/train.py), promote the new run:
     #   cp runs/smoothie-seg/<run>/weights/best.pt checkpoints/yolo_smoothie_seg.pt
+    # yolo_standard_seg.pt is the multi-mode-pipeline container detector (the
+    # "standard" labeler mode), promoted 2026-07-14 over the older nano-v5
+    # yolo_smoothie_seg.pt. NOTE: switching the container model shifts ROIs and
+    # can re-flip borderline chunk verdicts (see the ROI-destabilises-threshold
+    # note in CLAUDE.md) — always re-run scripts/validate_chunks.py after a change.
     yolo_weights: Path = field(
-        default_factory=lambda: Path("checkpoints/yolo_smoothie_seg.pt"))
+        default_factory=lambda: Path("checkpoints/yolo_standard_seg.pt"))
 
     # --- YOLO-seg LOGO suppression (chunk-detection FP filter, ADDITIVE) ---
     # A trained "zenblen"-wordmark seg model (training/train_multi.py --mode logo). When
@@ -391,7 +396,12 @@ class Config:
     # classical _logo_text_labels()/band/corner rules — it targets the residual
     # CLIPPED-wordmark FPs the classical text-line detector can't confirm (too few
     # letters / short span). Default OFF: opt-in via --logo-yolo for A/B eval.
-    dev_logo_yolo_suppress: bool = False
+    dev_logo_yolo_suppress: bool = True  # ON by default (2026-07-14): the trained
+                                         # logo mask is an additive FP filter — it only
+                                         # removes chunk components landing on the wordmark,
+                                         # targeting the clipped-wordmark FPs the classical
+                                         # text-line detector can't confirm. A/B validated
+                                         # 0 real-chunk loss before enabling.
     logo_weights: Path = field(
         default_factory=lambda: Path("checkpoints/yolo_logo_seg.pt"))
     logo_conf: float = 0.25          # instance confidence floor for the mask union
@@ -442,6 +452,45 @@ class Config:
     # made ROI-composition-robust. Set sam_bottom_extend_frac>0 to enable.
     sam_bottom_extend_frac: float = 0.0
     sam_gasket_dark_drop: float = 0.55
+
+    # --- YOLO-seg SPILL detection (separate pipeline) ---
+    # A trained "spill" seg model (training/train_multi.py --mode spill →
+    # checkpoints/yolo_spill_seg.pt). Spill = any smoothie material OUTSIDE the
+    # cup (drips on the gasket/holder, splatter on the machine). The SpillPipeline
+    # unions every instance mask above spill_conf and reports the total spilled
+    # area; a spill is DETECTED when that area is ≥ spill_min_area_px. The area
+    # floor rejects tiny specks / single-instance noise that the model occasionally
+    # fires on the gasket ring (the documented pale-on-steel / gasket-ring confound).
+    spill_weights: Path = field(
+        default_factory=lambda: Path("checkpoints/yolo_spill_seg.pt"))
+    spill_conf: float = 0.35          # instance confidence floor for the mask union.
+                                      # 0.35 not 0.25 (2026-07-15 disjoint eval): the
+                                      # lowest-confidence detections (≈0.25–0.30) were the
+                                      # spill FPs on the dark gasket edge / reflective steel;
+                                      # every audited REAL spill scored ≥0.60, so 0.35 is a
+                                      # safe precision floor. Genuine confident FPs on bright
+                                      # specular steel (e.g. 225288 @0.89) survive — those are
+                                      # a training-data gap (add steel-reflection negatives),
+                                      # NOT reachable by a chroma gate (pale-on-steel confound:
+                                      # real pale-smoothie spills measure chroma 7–10, BELOW
+                                      # the steel FP's 11.7 — no separating threshold exists).
+    spill_min_area_px: int = 400      # min total spill area (px) to call it a spill
+
+    # --- YOLO-seg CHUNK detection (unblended-lump, trained-model PRIORITY) ---
+    # A trained "chunk" seg model (training/train_multi.py --mode chunk ->
+    # checkpoints/yolo_chunk_seg.pt), dispatched via smoothie_cv.detection.chunk.
+    # Primary path: YOLO-standard ROI + YOLO-chunk masks; classical deviation
+    # ensemble is the fallback when chunk weights are missing or inference fails.
+    # chunk_yolo_input picks inference space (locked by
+    # scripts/eval_chunk_yolo_input.py on labeling/chunk_dataset val+test):
+    #   "full_filter" — full-frame YOLO, keep pixels inside smoothie ROI
+    #   "roi_crop"    — crop to ROI, run YOLO on the crop
+    chunk_detector_priority: list[str] = field(
+        default_factory=lambda: ["yolo", "classical"])
+    chunk_yolo_input: str = "full_filter"  # "full_filter" | "roi_crop"
+    chunk_weights: Path = field(
+        default_factory=lambda: Path("checkpoints/yolo_chunk_seg.pt"))
+    chunk_conf: float = 0.25          # instance confidence floor for the mask union
 
     # --- output ---
     output_dir: Path = field(default_factory=lambda: Path("outputs"))

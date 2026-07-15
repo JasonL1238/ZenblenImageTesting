@@ -1,5 +1,6 @@
 # Spill labeling priority — issue seeds first, then tray-similar lookalikes
 # Served first by labeling/app_multi.py /api/next when mode=spill
+224345  # manually prioritized to 1st
 223550
 223192
 223838

@@ -41,13 +41,16 @@ from smoothie_cv.detection import (
 from smoothie_cv.scoring.metrics import overlay_mask
 
 
-PIPELINE_NAMES = ["classical"]
+PIPELINE_NAMES = ["classical", "spill"]
 
 
 def load_pipeline(name: str, config: Config):
     if name == "classical":
         from smoothie_cv.pipelines.classical_cv import ClassicalCVPipeline
         return ClassicalCVPipeline(config)
+    if name == "spill":
+        from smoothie_cv.pipelines.spill import SpillPipeline
+        return SpillPipeline(config)
     raise ValueError(f"Unknown pipeline: {name!r}. Choose from {PIPELINE_NAMES}")
 
 
@@ -58,12 +61,60 @@ def _shade_subfolder(smoothie_type: SmoothieType) -> str:
     return "yellow"
 
 
+def run_spill_single(
+    image_path: Path,
+    config: Config,
+) -> dict:
+    """Run the spill pipeline (no container ROI — spill is defined on the whole
+    frame). Writes a spill overlay + JSON and returns the record."""
+    image = cv2.imread(str(image_path))
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {image_path}")
+
+    pipeline = load_pipeline("spill", config)
+    t0 = time.perf_counter()
+    result = pipeline.analyze(image)
+    runtime_ms = (time.perf_counter() - t0) * 1000
+
+    smoothie_dir = config.output_dir / image_path.stem
+    smoothie_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{image_path.stem}_spill"
+
+    mask_path = smoothie_dir / f"{stem}_mask.png"
+    cv2.imwrite(str(mask_path), overlay_mask(image, result.mask))
+
+    record = {
+        "image": str(image_path),
+        "pipeline": "spill",
+        "spill_detected": result.spill_detected,
+        "spill_area_px": result.spill_area_px,
+        "confidence": round(result.confidence, 4),
+        "passed": not result.spill_detected,  # "pass" = clean (no spill)
+        "runtime_ms": round(runtime_ms, 1),
+        "mask_path": str(mask_path),
+        "metadata": result.metadata,
+    }
+    (smoothie_dir / f"{stem}_result.json").write_text(json.dumps(record, indent=2))
+
+    verdict = "SPILL" if result.spill_detected else "clean"
+    print(
+        f"[spill] {image_path.name}  {verdict}  "
+        f"area={result.spill_area_px}px conf={result.confidence:.2f}  "
+        f"({runtime_ms:.0f} ms)"
+    )
+    return record
+
+
 def run_single(
     image_path: Path,
     pipeline_name: str,
     config: Config,
     detector: str | None = None,
+    chunk_detector: str | None = None,
 ) -> dict:
+    if pipeline_name == "spill":
+        return run_spill_single(image_path, config)
+
     image = cv2.imread(str(image_path))
     if image is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
@@ -82,6 +133,9 @@ def run_single(
     roi_mask, _bbox, det = detect_container(
         image, config, prefer=detector, yellow_params=yellow_params, return_meta=True
     )
+
+    if chunk_detector is not None:
+        config.chunk_detector_priority = [chunk_detector]
 
     pipeline = load_pipeline(pipeline_name, config)
 
@@ -139,6 +193,7 @@ def run_batch(
     pipeline_names: list[str],
     config: Config,
     detector: str | None = None,
+    chunk_detector: str | None = None,
 ) -> list[dict]:
     images = sorted(image_dir.rglob("*.jpg")) + sorted(image_dir.rglob("*.png"))
     if not images:
@@ -149,7 +204,10 @@ def run_batch(
     for img_path in images:
         for pname in pipeline_names:
             try:
-                row = run_single(img_path, pname, config, detector=detector)
+                row = run_single(
+                    img_path, pname, config,
+                    detector=detector, chunk_detector=chunk_detector,
+                )
                 rows.append(row)
             except NotImplementedError as e:
                 print(f"[{pname}] SKIP — {e}")
@@ -187,6 +245,12 @@ def format_run_readme(info: dict) -> str:
         f"mean {summary['mean_score']:.3f}",
     ]
 
+    def _metric(r: dict) -> str:
+        # chunk pipeline reports a blend score; spill reports spilled area.
+        if "blend_score" in r:
+            return f"{r['blend_score']:.3f}"
+        return f"{r.get('spill_area_px', 0)}px"
+
     failures = [r for r in info["results"] if not r.get("passed")]
     if failures:
         lines.extend(["", "## Failures", ""])
@@ -194,12 +258,12 @@ def format_run_readme(info: dict) -> str:
             lines.extend(["| Image | Pipeline | Score |", "|---|---|---|"])
             for r in failures:
                 lines.append(
-                    f"| `{Path(r['image']).name}` | {r['pipeline']} | {r['blend_score']:.3f} |"
+                    f"| `{Path(r['image']).name}` | {r['pipeline']} | {_metric(r)} |"
                 )
         else:
             lines.extend(["| Image | Score |", "|---|---|"])
             for r in failures:
-                lines.append(f"| `{Path(r['image']).name}` | {r['blend_score']:.3f} |")
+                lines.append(f"| `{Path(r['image']).name}` | {_metric(r)} |")
 
     lines.extend(["", "→ [comparison.csv](comparison.csv) · [run_info.json](run_info.json)", ""])
     return "\n".join(lines)
@@ -217,7 +281,8 @@ def write_run_manifest(
     finished = datetime.now()
     passed = sum(1 for r in records if r.get("passed"))
     failed = len(records) - passed
-    scores = [r["blend_score"] for r in records] or [0.0]
+    # blend_score is chunk-pipeline-only; spill records omit it.
+    scores = [r["blend_score"] for r in records if "blend_score" in r] or [0.0]
 
     info = {
         "run_id": run_dir.name,
@@ -267,12 +332,17 @@ def main() -> None:
                         help="ROI detector. 'auto' = YOLO priority, classical fallback "
                              "(default). 'yolo'/'sam'/'classical' force one "
                              "(sam is legacy/reference).")
+    parser.add_argument("--chunk-detector", choices=["auto", "yolo", "classical"],
+                        default="auto",
+                        help="Chunk detector. 'auto' = YOLO priority, classical "
+                             "fallback (default). 'yolo'/'classical' force one.")
     args = parser.parse_args()
 
     config = Config.load(args.config)
     if args.threshold is not None:
         config.threshold = args.threshold
     detector = None if args.detector == "auto" else args.detector
+    chunk_detector = None if args.chunk_detector == "auto" else args.chunk_detector
     output_root = Path(args.output_dir) if args.output_dir is not None else config.output_dir
 
     image_path = Path(args.image)
@@ -290,11 +360,17 @@ def main() -> None:
 
     records: list[dict] = []
     if image_path.is_dir():
-        records = run_batch(image_path, pipeline_names, config, detector=detector)
+        records = run_batch(
+            image_path, pipeline_names, config,
+            detector=detector, chunk_detector=chunk_detector,
+        )
     else:
         for pname in pipeline_names:
             try:
-                records.append(run_single(image_path, pname, config, detector=detector))
+                records.append(run_single(
+                    image_path, pname, config,
+                    detector=detector, chunk_detector=chunk_detector,
+                ))
             except NotImplementedError as e:
                 print(f"[{pname}] SKIP — {e}")
 

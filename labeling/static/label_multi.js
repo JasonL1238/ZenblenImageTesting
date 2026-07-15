@@ -6,11 +6,12 @@
 // the canvas backing store is the natural image size and CSS scales it to fit.
 
 const MODES = {
-  standard: { name: "MODE 1 · STANDARD (in-cup)", dataset: "→ standard_dataset", color: "#39c07a", sam: true  },
-  spill:    { name: "MODE 2 · SPILLED SMOOTHIE",   dataset: "→ spill_dataset",    color: "#e8833a", sam: false },
-  logo:     { name: "MODE 3 · LOGO",               dataset: "→ logo_dataset",     color: "#a06cd5", sam: false },
+  standard: { name: "MODE 1 · STANDARD (in-cup)", dataset: "→ standard_dataset", color: "#39c07a", seedEndpoint: "/api/sam"        },
+  spill:    { name: "MODE 2 · SPILLED SMOOTHIE",   dataset: "→ spill_dataset",    color: "#e8833a", seedEndpoint: null              },
+  logo:     { name: "MODE 3 · LOGO",               dataset: "→ logo_dataset",     color: "#a06cd5", seedEndpoint: null              },
+  chunk:    { name: "MODE 4 · CHUNK (unblended)",  dataset: "→ chunk_dataset",    color: "#e0524a", seedEndpoint: "/api/chunk_seed" },
 };
-const KEY_TO_MODE = { "1": "standard", "2": "spill", "3": "logo" };
+const KEY_TO_MODE = { "1": "standard", "2": "spill", "3": "logo", "4": "chunk" };
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -258,7 +259,7 @@ function applyTheme() {
   document.documentElement.dataset.mode = mode;
   document.getElementById("modename").textContent = MODES[mode].name;
   document.getElementById("dataset").textContent = MODES[mode].dataset;
-  document.title = { standard: "🟢", spill: "🟠", logo: "🟣" }[mode] + " label · " + mode;
+  document.title = { standard: "🟢", spill: "🟠", logo: "🟣", chunk: "🔴" }[mode] + " label · " + mode;
   document.querySelectorAll(".modebtn").forEach((b) =>
     b.classList.toggle("active", b.dataset.m === mode));
 }
@@ -312,10 +313,16 @@ function setItem(d) {
   img.onload = () => {
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
-    // Seed standard mode from a SAM candidate if we have no shapes yet.
-    if (MODES[mode].sam && !status && shapes.every((p) => !p.length)) {
-      fetch(`/api/sam/${d.file_id}`).then((r) => r.json()).then((s) => {
-        if (s.polygon && s.polygon.length >= 3) {
+    // Seed this mode from its candidate endpoint if we have no shapes yet
+    // (SAM for standard — single polygon; the classical chunk detector for
+    // chunk — possibly several disjoint lump shapes).
+    if (MODES[mode].seedEndpoint && !status && shapes.every((p) => !p.length)) {
+      fetch(`${MODES[mode].seedEndpoint}/${d.file_id}`).then((r) => r.json()).then((s) => {
+        if (s.shapes && s.shapes.length) {
+          shapes = s.shapes.map((p) => p.slice());
+          activeIdx = shapes.length - 1;
+          updateSidebar();
+        } else if (s.polygon && s.polygon.length >= 3) {
           shapes = [s.polygon]; activeIdx = 0; updateSidebar();
         }
         draw();

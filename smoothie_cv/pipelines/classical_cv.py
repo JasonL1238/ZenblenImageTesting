@@ -34,32 +34,25 @@ class ClassicalCVPipeline(BlendPipeline):
         if roi_mask is None:
             roi_mask = np.full((h, w), 255, dtype=np.uint8)
 
-        roi = crop_to_roi(image, roi_mask)
-
-        # trained-logo mask (ADDITIVE FP filter): run the logo model on the full
-        # frame, then crop to the SAME bbox as the ROI so it aligns with the
-        # crop-space component loop in _deviation_mask.
-        logo_crop = None
-        if self.config.dev_logo_yolo_suppress:
-            from smoothie_cv.detection.logo import detect_logo
-            full_logo = detect_logo(image, self.config)
-            x0, y0 = roi.offset
-            ch, cw = roi.mask.shape
-            logo_crop = full_logo[y0:y0 + ch, x0:x0 + cw]
+        chunk_detector = "canny"
+        chunk_yolo_input = getattr(self.config, "chunk_yolo_input", "full_filter")
 
         if self.config.classical_method == "canny":
+            roi = crop_to_roi(image, roi_mask)
             unblended = self._edge_mask(roi.image, roi.mask)
+            unblended = cv2.bitwise_and(unblended, roi.mask)
+            unblended = paste_mask(unblended, roi)
         else:
-            unblended = self._deviation_mask(roi.image, roi.mask, logo_crop)
+            # YOLO-chunk primary (full_filter or roi_crop), classical fallback.
+            # Logo suppress runs inside the classical adapter only.
+            from smoothie_cv.detection.chunk import detect_chunk
+            unblended, chunk_detector = detect_chunk(
+                image, roi_mask, self.config,
+            )
 
-        # clip to ROI and map back to full-frame coords
-        unblended = cv2.bitwise_and(unblended, roi.mask)
-        unblended = paste_mask(unblended, roi)
-
-        # Path 5: gated below-ROI cream band (full-frame). When it fires, extend the
-        # ROI over the band so the cream counts in both the chunk mask and the score
-        # denominator. Gated on the cream signature → only genuine-cream cups change.
-        if self.config.dev_botband_enable:
+        # Path 5: gated below-ROI cream band — classical-only. Do not layer
+        # classical cream recovery on top of a successful YOLO chunk mask.
+        if chunk_detector == "classical" and self.config.dev_botband_enable:
             band = self._bottom_cream_band(image, roi_mask)
             if band is not None and band.any():
                 roi_mask = cv2.bitwise_or(roi_mask, band)
@@ -76,6 +69,8 @@ class ClassicalCVPipeline(BlendPipeline):
             metadata={
                 "method": self.config.classical_method,
                 "dev_k_sigma": self.config.dev_k_sigma,
+                "chunk_detector": chunk_detector,
+                "chunk_yolo_input": chunk_yolo_input,
             },
         )
 

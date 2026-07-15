@@ -13,6 +13,18 @@ class BlendResult:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass
+class SpillResult:
+    """Spill-pipeline output. Distinct from BlendResult: spill is a binary
+    detected/clean verdict plus the spilled area, not a 0–1 blend score."""
+    spill_detected: bool        # any spill mask ≥ config.spill_min_area_px
+    spill_area_px: int          # total spilled-material area (pixels)
+    mask: np.ndarray            # HxW uint8; 255 = spilled material
+    confidence: float           # max instance confidence (0.0 if none)
+    pipeline_name: str
+    metadata: dict = field(default_factory=dict)
+
+
 class BlendPipeline(ABC):
     """All pipelines implement this interface."""
 

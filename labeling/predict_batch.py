@@ -125,6 +125,15 @@ def main() -> None:
         img = cv2.imread(str(img_path))
         if img is None:
             continue
+
+        # Chunk mode: keep only detections inside the smoothie ROI (YOLO-standard),
+        # matching the live detect_chunk full_filter path. Other modes stay full-frame.
+        roi_mask = None
+        if args.mode == "chunk":
+            from smoothie_cv.config import Config
+            from smoothie_cv.detection import detect_container
+            roi_mask, _ = detect_container(img, Config(), prefer="yolo")
+
         result = model(img, verbose=False, device="cpu", conf=args.conf)[0]
 
         polys: list[tuple[list, float]] = []
@@ -132,8 +141,11 @@ def main() -> None:
             confs = result.boxes.conf.cpu().numpy()
             for j, xy in enumerate(result.masks.xy):
                 pts = _simplify(xy)
-                if len(pts) >= 3:
-                    polys.append((pts, float(confs[j])))
+                if len(pts) < 3:
+                    continue
+                if roi_mask is not None and not _poly_inside_roi(pts, roi_mask):
+                    continue
+                polys.append((pts, float(confs[j])))
 
         conn.execute("DELETE FROM predictions WHERE file_id = ? AND mode = ?",
                      (fid, args.mode))
@@ -160,6 +172,19 @@ def main() -> None:
         print(f"[{i}/{len(ids)}] {fid}  dets={len(polys)}  top_conf={top:.2f}")
 
     print(f"done: {n_dets} with detections, {n_empty} empty (staged as pending)")
+
+
+def _poly_inside_roi(pts: list, roi_mask) -> bool:
+    """True if the polygon centroid lands inside the smoothie ROI."""
+    import numpy as np
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    cx = int(round(sum(xs) / len(xs)))
+    cy = int(round(sum(ys) / len(ys)))
+    h, w = roi_mask.shape[:2]
+    if not (0 <= cx < w and 0 <= cy < h):
+        return False
+    return bool(roi_mask[cy, cx] > 0)
 
 
 if __name__ == "__main__":

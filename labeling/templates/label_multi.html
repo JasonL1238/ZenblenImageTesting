@@ -8,6 +8,7 @@
   :root[data-mode="standard"] { --mode:#39c07a; --mode-dim:rgba(57,192,122,.18); }
   :root[data-mode="spill"]    { --mode:#e8833a; --mode-dim:rgba(232,131,58,.20); }
   :root[data-mode="logo"]     { --mode:#a06cd5; --mode-dim:rgba(160,108,213,.20); }
+  :root[data-mode="chunk"]    { --mode:#e0524a; --mode-dim:rgba(224,82,74,.20); }
 
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg);
@@ -36,6 +37,7 @@
   .modebtn[data-m="standard"].active { background:#39c07a; color:#0d0f12; border-color:#39c07a; }
   .modebtn[data-m="spill"].active    { background:#e8833a; color:#0d0f12; border-color:#e8833a; }
   .modebtn[data-m="logo"].active     { background:#a06cd5; color:#0d0f12; border-color:#a06cd5; }
+  .modebtn[data-m="chunk"].active    { background:#e0524a; color:#0d0f12; border-color:#e0524a; }
   #layercount { color:var(--muted); font-size:12px; }
   #layercount b { color:var(--mode); }
 
@@ -85,6 +87,7 @@
   <button class="modebtn" data-m="standard">1 · Standard</button>
   <button class="modebtn" data-m="spill">2 · Spill</button>
   <button class="modebtn" data-m="logo">3 · Logo</button>
+  <button class="modebtn" data-m="chunk">4 · Chunk</button>
   <span class="spacer" style="flex:1"></span>
   <span id="layercount"></span>
 </div>
@@ -118,7 +121,7 @@
 
     <h2>Modes</h2>
     <ul>
-      <li><span class="key">1</span>/<span class="key">2</span>/<span class="key">3</span> switch pipeline (keeps image)</li>
+      <li><span class="key">1</span>/<span class="key">2</span>/<span class="key">3</span>/<span class="key">4</span> switch pipeline (keeps image)</li>
       <li><span class="key">←</span>/<span class="key">→</span> prev / next (no save)</li>
       <li><span class="key">←</span> goes back to ANY earlier image to re-edit — even if unchanged this run (banner shows <i>was: …</i>)</li>
     </ul>

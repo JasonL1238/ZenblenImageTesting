@@ -1,4 +1,4 @@
-"""Multi-mode segmentation labeling UI (spill / logo / standard).
+"""Multi-mode segmentation labeling UI (spill / logo / standard / chunk).
 
 A SECOND labeling app that runs ALONGSIDE the existing container tool
 (``app.py``) without touching its data. Same image pool (the ``files`` table in
@@ -6,16 +6,18 @@ A SECOND labeling app that runs ALONGSIDE the existing container tool
 ``mode_status`` tables — the ``labels`` table and ``smoothie_dataset`` are never
 modified here.
 
-Three INDEPENDENT modes, each its own single-class YOLO-seg dataset:
+Four INDEPENDENT modes, each its own single-class YOLO-seg dataset:
   1 standard — smoothie inside the cup   (class 0: smoothie)
   2 spill    — smoothie outside the cup  (class 0: spill)   [new YOLO-nano]
   3 logo     — the zenblen logo/wordmark (class 0: logo)    [new YOLO-nano]
+  4 chunk    — an unblended lump/chunk   (class 0: chunk)   [new YOLO-nano]
 
 Switching mode keeps the CURRENT image and loads that image's annotations for
 the new mode, so one source image can be segmented separately in each mode.
 Export per mode with ``export_multi.py``.
 
-Run (no torch needed — free-draw, SAM only seeds standard mode if present):
+Run (no torch needed — free-draw; SAM seeds standard mode, the classical
+detector seeds chunk mode, both only if a candidate is on disk):
   python labeling/app_multi.py            # http://127.0.0.1:5001
 """
 from __future__ import annotations
@@ -61,6 +63,19 @@ def api_sam(file_id: int):
         return jsonify({})
     data = json.loads(p.read_text())
     return jsonify({"polygon": data.get("points", [])})
+
+
+@app.route("/api/chunk_seed/<int:file_id>")
+def api_chunk_seed(file_id: int):
+    """Optional classical-detector candidate shapes (chunk mode seed).
+
+    {} if none on disk (run labeling/run_chunk_seed.py first). Multi-shape,
+    unlike /api/sam — a chunk mask can hold several disjoint lumps."""
+    p = db.CHUNK_SEED_DIR / f"{file_id}.json"
+    if not p.exists():
+        return jsonify({})
+    data = json.loads(p.read_text())
+    return jsonify({"shapes": data.get("shapes", [])})
 
 
 def _shapes_for(conn, file_id: int, mode: str) -> list[list[list[int]]]:
