@@ -53,14 +53,26 @@ def _simplify(points, eps_frac: float = 0.004):
     return [[int(x), int(y)] for x, y in out]
 
 
-def _targets(conn, mode: str, limit: int | None) -> list[int]:
-    """Raw-for-this-mode images: downloaded, no decision, not yet predicted."""
+def _targets(conn, mode: str, limit: int | None,
+             include_pending: bool = False) -> list[int]:
+    """Images to (re-)predict for this mode: downloaded, not flagged, and NOT
+    already human-validated (``mode_status IS NULL`` excludes hand-labeled and
+    approved; the rejected status is likewise left alone).
+
+    Default: only RAW images (never predicted). With ``include_pending`` the set
+    also covers ``review_status='pending'`` images — un-validated predictions
+    left by a PREVIOUS model — so a freshly trained model can re-predict them
+    (the per-image ``DELETE FROM predictions`` in the loop replaces the stale
+    rows; the review_status upsert keeps them pending for the reviewer).
+    """
+    rs_clause = ("(rs.file_id IS NULL OR rs.status = 'pending')"
+                 if include_pending else "rs.file_id IS NULL")
     sql = (
         "SELECT f.file_id FROM files f "
         "LEFT JOIN mode_status ms ON ms.file_id = f.file_id AND ms.mode = ? "
         "LEFT JOIN review_status rs ON rs.file_id = f.file_id AND rs.mode = ? "
         "LEFT JOIN image_flags fl ON fl.file_id = f.file_id "
-        "WHERE f.downloaded = 1 AND ms.file_id IS NULL AND rs.file_id IS NULL "
+        f"WHERE f.downloaded = 1 AND ms.file_id IS NULL AND {rs_clause} "
         "  AND fl.file_id IS NULL "  # skip no_smoothie / machinery shots
         "ORDER BY f.file_id ASC"
     )
@@ -82,6 +94,10 @@ def main() -> None:
                     help="min detection confidence (ultralytics default 0.25)")
     ap.add_argument("--limit", type=int, default=None,
                     help="process at most N images (for a quick trial run)")
+    ap.add_argument("--repredict", action="store_true",
+                    help="also re-run un-validated 'pending' images left by a "
+                    "previous model (replaces their stale predictions); "
+                    "approved/rejected/hand-labeled images are never touched")
     args = ap.parse_args()
 
     weights = Path(args.weights) if args.weights else db.MODE_WEIGHTS[args.mode]
@@ -96,8 +112,9 @@ def main() -> None:
 
     model = YOLO(str(weights))
     conn = db.connect()
-    ids = _targets(conn, args.mode, args.limit)
-    print(f"[{args.mode}] {len(ids)} raw images → predicting with {weights.name}")
+    ids = _targets(conn, args.mode, args.limit, include_pending=args.repredict)
+    kind = "raw+pending" if args.repredict else "raw"
+    print(f"[{args.mode}] {len(ids)} {kind} images → predicting with {weights.name}")
 
     model_run = weights.name
     n_dets = n_empty = 0

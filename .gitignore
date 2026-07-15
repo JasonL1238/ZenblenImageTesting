@@ -18,6 +18,13 @@ labeling/data/
 labeling/dataset/
 labeling/labels.db
 labeling/labels.db-*
+# Local safety snapshots — kept on disk, never committed
+labeling/labels.db.bak*
+# Stray root DB created by running a script from the repo root
+/labels.db
+
+# Superseded weight backups (originals preserved in runs/<mode>-seg/*/weights/best.pt)
+checkpoints/*.bak*
 
 # Multi-mode labeler (app_multi.py) per-mode exports — code committed, data not.
 labeling/spill_dataset/
