@@ -102,6 +102,9 @@ def main() -> None:
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--patience", type=int, default=30)
     ap.add_argument("--device", default=DEVICE, help="cpu | 0 | mps (mps unsupported for seg)")
+    ap.add_argument("--no-amp", action="store_true",
+                    help="disable mixed precision — workaround for CUDA "
+                    "'illegal memory access' crashes seen on some GPU/driver combos")
     args = ap.parse_args()
 
     cfg = MODE_CFG[args.mode]
@@ -130,6 +133,7 @@ def main() -> None:
         project=cfg["project"],
         name=run_name,
         exist_ok=False,
+        amp=not args.no_amp,
     )
 
     metrics = model.val()
