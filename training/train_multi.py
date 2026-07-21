@@ -136,10 +136,19 @@ def main() -> None:
         amp=not args.no_amp,
     )
 
-    metrics = model.val()
-    best = f"{cfg['project']}/{run_name}/weights/best.pt"
-    print(f"\n[{args.mode}] mAP50 (mask):    {metrics.seg.map50:.4f}")
-    print(f"[{args.mode}] mAP50-95 (mask): {metrics.seg.map:.4f}")
+    # Re-validation is informational only — best.pt is already written by
+    # model.train() above. A flaky Windows DataLoader worker here must not
+    # crash the script and lose an otherwise-successful run.
+    try:
+        metrics = model.val()
+        print(f"\n[{args.mode}] mAP50 (mask):    {metrics.seg.map50:.4f}")
+        print(f"[{args.mode}] mAP50-95 (mask): {metrics.seg.map:.4f}")
+    except Exception as e:
+        print(f"\n[{args.mode}] (re-validation skipped after training succeeded: {e})")
+
+    weights_dirs = sorted(Path(cfg["project"]).glob(f"{run_name}*/weights/best.pt"),
+                          key=lambda p: p.stat().st_mtime, reverse=True)
+    best = str(weights_dirs[0]) if weights_dirs else f"{cfg['project']}/{run_name}/weights/best.pt"
     print(f"[{args.mode}] Weights: {best}")
     print(f"[{args.mode}] To deploy: cp {best} {cfg['deploy']}")
     # Keep training/checkpoints mirrors for labeling predict/flag tools
