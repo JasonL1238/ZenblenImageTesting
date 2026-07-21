@@ -5,6 +5,7 @@ Each mode is an INDEPENDENT single-class dataset (no mixed-class label files):
   spill    -> spill_dataset/          class 0: spill
   logo     -> logo_dataset/           class 0: logo
   chunk    -> chunk_dataset/          class 0: chunk
+  unmixed  -> unmixed_dataset/        class 0: unmixed
 
 Exported filenames are mode-prefixed (``spill_4821.jpg`` / ``spill_4821.txt``)
 so any file is self-identifying even out of its folder.
@@ -41,6 +42,7 @@ MODE_DIRS = {
     "spill":    db.ROOT / "spill_dataset",
     "logo":     db.ROOT / "logo_dataset",
     "chunk":    db.ROOT / "chunk_dataset",
+    "unmixed":  db.ROOT / "unmixed_dataset",
 }
 
 

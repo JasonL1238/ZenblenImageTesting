@@ -10,8 +10,9 @@ const MODES = {
   spill:    { name: "MODE 2 · SPILLED SMOOTHIE",   dataset: "→ spill_dataset",    color: "#e8833a", seedEndpoint: null              },
   logo:     { name: "MODE 3 · LOGO",               dataset: "→ logo_dataset",     color: "#a06cd5", seedEndpoint: null              },
   chunk:    { name: "MODE 4 · CHUNK (unblended)",  dataset: "→ chunk_dataset",    color: "#e0524a", seedEndpoint: "/api/chunk_seed" },
+  unmixed:  { name: "MODE 5 · UNMIXED (streaks)",  dataset: "→ unmixed_dataset",  color: "#2ec5c5", seedEndpoint: null              },
 };
-const KEY_TO_MODE = { "1": "standard", "2": "spill", "3": "logo", "4": "chunk" };
+const KEY_TO_MODE = { "1": "standard", "2": "spill", "3": "logo", "4": "chunk", "5": "unmixed" };
 
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
@@ -92,9 +93,9 @@ function draw() {
       ctx.moveTo(p[0][0], p[0][1]);
       for (let i = 1; i < p.length; i++) ctx.lineTo(p[i][0], p[i][1]);
       if (p.length >= 3) ctx.closePath();
-      // Spill mode: outline only — the fill obscures the residue we're tracing.
-      // Other modes keep the translucent fill for at-a-glance coverage.
-      if (mode !== "spill") {
+      // Spill/chunk: outline only — fill covers the region and makes it harder
+      // to see/identify what you're labeling. Other modes keep translucent fill.
+      if (mode !== "spill" && mode !== "chunk" && mode !== "unmixed") {
         ctx.fillStyle = hexA(color, s === activeIdx ? 0.22 : 0.12);
         ctx.fill();
       }
@@ -259,7 +260,7 @@ function applyTheme() {
   document.documentElement.dataset.mode = mode;
   document.getElementById("modename").textContent = MODES[mode].name;
   document.getElementById("dataset").textContent = MODES[mode].dataset;
-  document.title = { standard: "🟢", spill: "🟠", logo: "🟣", chunk: "🔴" }[mode] + " label · " + mode;
+  document.title = { standard: "🟢", spill: "🟠", logo: "🟣", chunk: "🔴", unmixed: "🔵" }[mode] + " label · " + mode;
   document.querySelectorAll(".modebtn").forEach((b) =>
     b.classList.toggle("active", b.dataset.m === mode));
 }

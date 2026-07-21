@@ -1,4 +1,4 @@
-"""Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard / chunk).
+"""Train a YOLO-seg model for a multi-mode labeler dataset (spill / logo / standard / chunk / unmixed).
 
 Run from the ``training/`` directory (paths below are cwd-relative to training/):
 
@@ -47,6 +47,19 @@ MODE_CFG: dict[str, dict[str, str]] = {
         "data":    str(_TRAINING / "labeling/chunk_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/chunk-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_chunk_seg.pt"),
+    },
+    "unmixed": {
+        "data":    str(_TRAINING / "labeling/unmixed_dataset/data.yaml"),
+        "project": str(_TRAINING / "runs/unmixed-seg"),
+        "deploy":  str(_ACTIVE_CKPT / "yolo_unmixed_seg.pt"),
+    },
+    # Inverse-of-chunks experiment: class 'blended' = ROI - human chunks. Built
+    # by experimentation/inverse_blend/build_inverse_dataset.py (NOT a hand mode,
+    # so it is absent from db.MODES). See that script for the known caveat.
+    "blended": {
+        "data":    str(_TRAINING / "labeling/blended_dataset/data.yaml"),
+        "project": str(_TRAINING / "runs/blended-seg"),
+        "deploy":  str(_ACTIVE_CKPT / "yolo_blended_seg.pt"),
     },
 }
 

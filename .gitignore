@@ -10,6 +10,10 @@ training/outputs/
 training/labeling/data/
 training/labeling/dataset/
 
+# Experimentation: keep the code, drop heavy generated outputs (mask cache,
+# comparison panels, validation dumps) — never needed on a training box.
+experimentation/**/outputs/
+
 # Environment / secrets
 .env
 .venv/

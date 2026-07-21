@@ -28,10 +28,17 @@ VERDICTS = ("good", "corrected", "bad", "skip")
 #   spill    -> smoothie outside the cup  -> class 0: spill
 #   logo     -> the zenblen logo/wordmark -> class 0: logo
 #   chunk    -> an unblended lump/chunk   -> class 0: chunk
-# One image labeled in all four modes yields four SEPARATE image+label pairs,
+#   unmixed  -> non-chunk unblending      -> class 0: unmixed
+#               (streaks, unmixed color patches, gradients/layering, watery/
+#               diluted zones). Small isolated speckle — seeds/chia/blueberry
+#               skin — is normal recipe texture and is NOT marked. This is the
+#               failure mode the chunk model structurally misses (no discrete
+#               blob to find); it is a SEPARATE additive class, chunk untouched.
+# One image labeled in all five modes yields five SEPARATE image+label pairs,
 # one per dataset — never a single file with mixed-class labels.
-MODES = ("standard", "spill", "logo", "chunk")
-MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo", "chunk": "chunk"}
+MODES = ("standard", "spill", "logo", "chunk", "unmixed")
+MODE_CLASS_NAMES = {"standard": "smoothie", "spill": "spill", "logo": "logo",
+                    "chunk": "chunk", "unmixed": "unmixed"}
 # Persisted statuses. "skip" is deliberately NOT stored (Skip = advance without
 # writing state, so the image stays undecided and reappears later).
 MODE_STATUSES = ("labeled", "clean")
@@ -64,6 +71,7 @@ MODE_WEIGHTS = {
     "spill": CHECKPOINTS_DIR / "yolo_spill_seg.pt",
     "logo": CHECKPOINTS_DIR / "yolo_logo_seg.pt",
     "chunk": CHECKPOINTS_DIR / "yolo_chunk_seg.pt",
+    "unmixed": CHECKPOINTS_DIR / "yolo_unmixed_seg.pt",
 }
 
 
