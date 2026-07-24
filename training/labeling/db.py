@@ -74,6 +74,24 @@ MODE_WEIGHTS = {
     "unmixed": CHECKPOINTS_DIR / "yolo_unmixed_seg.pt",
 }
 
+# --- classification labeler (app_classify.py) --------------------------------
+# A FOURTH, self-contained pipeline: whole-image classification (no polygons),
+# for tasks where the label is a single verdict about the whole frame rather
+# than a region within it. Shares the `files` image registry above but writes
+# ONLY to its own `classifications` table (see schema below) — the seg tables
+# (`labels`, `annotations`, `mode_status`, `predictions`, `review_status`) are
+# never touched, and `db.MODES` is not extended with classification tasks.
+#   cleandone -> is this CleanDone station photo dirty or clean?
+CLS_TASKS = ("cleandone",)
+CLS_LABELS = ("dirty", "clean")
+CLS_WEIGHTS = {
+    "cleandone": CHECKPOINTS_DIR / "best_cleaning.pt",
+}
+# Files-API category each task's images are drawn from (files.category_name).
+TASK_CATEGORY = {
+    "cleandone": "CleanDone",
+}
+
 
 def connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open the labeling DB, creating the schema on first use.
@@ -173,6 +191,18 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             confidence REAL,               -- top smoothie confidence seen (0 if none)
             created_at TEXT NOT NULL
         );
+
+        -- Whole-image classification labeler (app_classify.py). One label per
+        -- (image, task) — the classification analogue of `mode_status`, but a
+        -- single verdict instead of a polygon set. No `annotations` row is ever
+        -- written for a classification task.
+        CREATE TABLE IF NOT EXISTS classifications (
+            file_id    INTEGER NOT NULL REFERENCES files(file_id),
+            task       TEXT NOT NULL,      -- one of db.CLS_TASKS
+            label      TEXT NOT NULL,      -- one of db.CLS_LABELS
+            labeled_at TEXT NOT NULL,
+            PRIMARY KEY (file_id, task)
+        );
         """
     )
     # Provenance column on annotations (additive; older DBs predate it). Guarded
@@ -208,3 +238,24 @@ def ensure_dirs() -> None:
     """Create the on-disk data directories used by the pipeline stages."""
     for d in (IMAGES_DIR, CHUNK_SEED_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+
+# Every table that carries a `file_id` FK back to `files` — kept in one place
+# so a hard delete never leaves an orphaned row behind in a table added later.
+_FILE_ID_TABLES = ("labels", "annotations", "mode_status", "predictions",
+                    "review_status", "image_flags", "classifications")
+
+
+def delete_file(conn: sqlite3.Connection, file_id: int) -> None:
+    """Permanently remove ``file_id`` everywhere: every DB row that
+    references it (across ALL pipelines — seg + classification, not just the
+    one that called this) and its jpg on disk. IRREVERSIBLE — callers are
+    responsible for confirming with the user first.
+    """
+    for table in _FILE_ID_TABLES:
+        conn.execute(f"DELETE FROM {table} WHERE file_id = ?", (file_id,))
+    conn.execute("DELETE FROM files WHERE file_id = ?", (file_id,))
+    conn.commit()
+    path = IMAGES_DIR / f"{file_id}.jpg"
+    if path.exists():
+        path.unlink()

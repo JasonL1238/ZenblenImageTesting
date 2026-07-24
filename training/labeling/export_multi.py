@@ -1,11 +1,11 @@
 """Export per-mode YOLO-seg datasets from the multi-mode labeler.
 
 Each mode is an INDEPENDENT single-class dataset (no mixed-class label files):
-  standard -> smoothie_dataset_std/   class 0: smoothie
-  spill    -> spill_dataset/          class 0: spill
-  logo     -> logo_dataset/           class 0: logo
-  chunk    -> chunk_dataset/          class 0: chunk
-  unmixed  -> unmixed_dataset/        class 0: unmixed
+  standard -> datasets/smoothie_dataset_std/   class 0: smoothie
+  spill    -> datasets/spill_dataset/          class 0: spill
+  logo     -> datasets/logo_dataset/           class 0: logo
+  chunk    -> datasets/chunk_dataset/          class 0: chunk
+  unmixed  -> datasets/unmixed_dataset/        class 0: unmixed
 
 Exported filenames are mode-prefixed (``spill_4821.jpg`` / ``spill_4821.txt``)
 so any file is self-identifying even out of its folder.
@@ -36,13 +36,13 @@ sys.path.insert(0, str(_TRAINING))  # `import labeling`
 sys.path.insert(0, str(_REPO / "active_pipeline"))  # `import smoothie_cv`
 from labeling import db
 
-# Default output dir per mode (under labeling/, separate from runtime checkpoints).
+# Default output dir per mode (under labeling/datasets/, separate from runtime checkpoints).
 MODE_DIRS = {
-    "standard": db.ROOT / "smoothie_dataset_std",
-    "spill":    db.ROOT / "spill_dataset",
-    "logo":     db.ROOT / "logo_dataset",
-    "chunk":    db.ROOT / "chunk_dataset",
-    "unmixed":  db.ROOT / "unmixed_dataset",
+    "standard": db.ROOT / "datasets" / "smoothie_dataset_std",
+    "spill":    db.ROOT / "datasets" / "spill_dataset",
+    "logo":     db.ROOT / "datasets" / "logo_dataset",
+    "chunk":    db.ROOT / "datasets" / "chunk_dataset",
+    "unmixed":  db.ROOT / "datasets" / "unmixed_dataset",
 }
 
 

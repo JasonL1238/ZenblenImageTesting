@@ -1,6 +1,6 @@
 """
 YOLO-seg CHUNK detection — the trained "chunk" labeler-mode model
-(``checkpoints/yolo_chunk_seg.pt``, ``labeling/chunk_dataset``,
+(``checkpoints/yolo_chunk_seg.pt``, ``labeling/datasets/chunk_dataset``,
 ``training/train_multi.py --mode chunk``). See ``smoothie_cv.detection.chunk``
 for the dispatcher.
 

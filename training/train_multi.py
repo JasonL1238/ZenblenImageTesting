@@ -29,27 +29,27 @@ _TRAIN_CKPT = _TRAINING / "checkpoints"
 
 MODE_CFG: dict[str, dict[str, str]] = {
     "standard": {
-        "data":    str(_TRAINING / "labeling/smoothie_dataset_std/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/smoothie_dataset_std/data.yaml"),
         "project": str(_TRAINING / "runs/standard-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_standard_seg.pt"),
     },
     "spill": {
-        "data":    str(_TRAINING / "labeling/spill_dataset/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/spill_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/spill-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_spill_seg.pt"),
     },
     "logo": {
-        "data":    str(_TRAINING / "labeling/logo_dataset/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/logo_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/logo-seg"),
         "deploy":  str(_TRAIN_CKPT / "yolo_logo_seg.pt"),
     },
     "chunk": {
-        "data":    str(_TRAINING / "labeling/chunk_dataset/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/chunk_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/chunk-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_chunk_seg.pt"),
     },
     "unmixed": {
-        "data":    str(_TRAINING / "labeling/unmixed_dataset/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/unmixed_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/unmixed-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_unmixed_seg.pt"),
     },
@@ -57,7 +57,7 @@ MODE_CFG: dict[str, dict[str, str]] = {
     # by experimentation/inverse_blend/build_inverse_dataset.py (NOT a hand mode,
     # so it is absent from db.MODES). See that script for the known caveat.
     "blended": {
-        "data":    str(_TRAINING / "labeling/blended_dataset/data.yaml"),
+        "data":    str(_TRAINING / "labeling/datasets/blended_dataset/data.yaml"),
         "project": str(_TRAINING / "runs/blended-seg"),
         "deploy":  str(_ACTIVE_CKPT / "yolo_blended_seg.pt"),
     },

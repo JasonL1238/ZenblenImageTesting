@@ -1,0 +1,245 @@
+<meta charset="utf-8">
+<title>Classify labeling</title>
+<style>
+  :root { --bg:#14161a; --panel:#1e2127; --fg:#e6e8eb; --muted:#8b94a3;
+          --dirty:#e0524a; --dirty-dim:rgba(224,82,74,.20);
+          --clean:#39c07a; --clean-dim:rgba(57,192,122,.18); }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.4 system-ui, sans-serif; }
+
+  #banner { display:flex; align-items:center; gap:14px; padding:8px 16px;
+            background:#3a3f49; color:var(--fg); font-weight:700;
+            letter-spacing:.03em; }
+  #banner .task { opacity:.8; font-weight:600; }
+  #banner .spacer { flex:1; }
+  #banner #fileid { font-weight:600; opacity:.85; }
+  #banner #wasbadge { display:none; padding:2px 10px; border-radius:10px;
+            background:#0d0f12; color:#ffd23f; font-size:12px; font-weight:800; }
+  #banner #wasbadge.on { display:inline; }
+  #banner #priobadge { display:none; padding:2px 10px; border-radius:10px;
+            background:#0d0f12; color:#ffd23f; font-size:12px; font-weight:800;
+            letter-spacing:.06em; }
+  #banner #priobadge.on { display:inline; }
+  #counts .prio { color:#ffd23f; font-weight:600; }
+
+  main { display:flex; height:calc(100vh - 41px); }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center;
+           overflow:hidden; position:relative; background:#0f1013; }
+  #frame { border:6px solid #3a3f49; max-width:100%; max-height:100%; display:flex; }
+  #frame.dirty { border-color:var(--dirty); }
+  #frame.clean { border-color:var(--clean); }
+  img#photo { display:block; max-width:100%; max-height:calc(100vh - 80px); }
+
+  aside { width:280px; padding:16px; background:var(--panel);
+          border-left:1px solid #2a2e36; overflow:auto; }
+  aside h2 { font-size:12px; text-transform:uppercase; color:var(--muted);
+             letter-spacing:.05em; margin:18px 0 6px; }
+  .btn { display:block; width:100%; text-align:left; padding:9px 12px; margin:6px 0;
+         border-radius:8px; border:1px solid #3a3f49; background:#2a2e36;
+         color:var(--fg); cursor:pointer; font-size:13px; font-weight:600; }
+  .btn.dirty { background:var(--dirty-dim); border-color:var(--dirty); color:var(--dirty); }
+  .btn.clean { background:var(--clean-dim); border-color:var(--clean); color:var(--clean); }
+  .btn.danger { background:transparent; border-color:#5a2320; color:#e0524a; }
+  .btn.danger:hover:not(:disabled) { background:rgba(224,82,74,.12); }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .btn .k { float:right; opacity:.7; font-family:ui-monospace,monospace; }
+  .key { display:inline-block; min-width:20px; text-align:center; padding:1px 6px;
+         background:#2a2e36; border-radius:4px; border:1px solid #3a3f49;
+         font-family:ui-monospace,monospace; font-size:12px; }
+  ul { list-style:none; padding:0; margin:0; }
+  li { margin:6px 0; color:var(--muted); }
+  #counts { color:var(--muted); font-size:12px; line-height:1.9; }
+  #counts b { color:var(--fg); }
+  #done { display:none; text-align:center; color:var(--muted); font-size:16px; }
+</style>
+
+<div id="banner">
+  <span>CleanDone classify</span>
+  <span class="task">→ cleandone_cls_dataset</span>
+  <span class="spacer"></span>
+  <span id="priobadge">★ PRIORITY</span>
+  <span id="wasbadge"></span>
+  <span id="fileid"></span>
+</div>
+
+<main>
+  <div id="stage">
+    <div id="frame"><img id="photo"></div>
+    <div id="done">🎉 nothing left to classify.</div>
+  </div>
+  <aside>
+    <h2>Verdict</h2>
+    <button class="btn dirty" id="btnDirty">Dirty<span class="k">D</span></button>
+    <button class="btn clean" id="btnClean">Clean<span class="k">C</span></button>
+    <button class="btn" id="btnSkip">Skip (no save)<span class="k">S</span></button>
+    <button class="btn" id="btnUndo">Undo last<span class="k">Z</span></button>
+
+    <h2>Danger zone</h2>
+    <button class="btn danger" id="btnDelete">Delete image (permanent)<span class="k">X</span></button>
+
+    <h2>Navigate</h2>
+    <ul>
+      <li><span class="key">←</span>/<span class="key">→</span> prev / next</li>
+      <li><span class="key">←</span> goes back to ANY earlier image to re-classify</li>
+    </ul>
+
+    <h2>Progress</h2>
+    <div id="counts"></div>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const TASK = "cleandone";
+const frameEl = document.getElementById("frame");
+const doneEl = document.getElementById("done");
+const photo = document.getElementById("photo");
+const fileidEl = document.getElementById("fileid");
+const wasbadgeEl = document.getElementById("wasbadge");
+const priobadgeEl = document.getElementById("priobadge");
+
+let fileId = null;
+let label = null;      // saved label for (fileId, TASK): 'dirty'|'clean'|null
+const visited = [];
+let histIndex = -1;
+const undoStack = [];  // {file_id, prevLabel} — most recent classify() calls, this session
+
+function post(url, body, done) {
+  fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(() => { refreshProgress(); done && done(); })
+    .catch((err) => alert("Save failed: " + err.message));
+}
+function classify(l) {
+  if (!fileId) return;
+  undoStack.push({ file_id: fileId, prevLabel: label });
+  updateButtons();
+  post("/api/classify", { file_id: fileId, task: TASK, label: l }, goNext);
+}
+function skip() { goNext(); }   // no state written, even if the image already has a label
+function undo() {
+  if (!undoStack.length) return;
+  const { file_id, prevLabel } = undoStack.pop();
+  updateButtons();
+  if (prevLabel) {
+    post("/api/classify", { file_id, task: TASK, label: prevLabel }, () => loadItem(file_id));
+  } else {
+    post("/api/unclassify", { file_id, task: TASK }, () => loadItem(file_id));
+  }
+}
+function deleteImage() {
+  if (!fileId) return;
+  if (!confirm(`Permanently delete image #${fileId}? This removes the file and ` +
+               `all its data — cannot be undone.`)) return;
+  const deletedId = fileId;
+  fetch("/api/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ file_id: deletedId }),
+  }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(() => {
+      const vi = visited.indexOf(deletedId);
+      if (vi !== -1) {
+        visited.splice(vi, 1);
+        if (histIndex >= vi) histIndex--;
+      }
+      for (let i = undoStack.length - 1; i >= 0; i--) {
+        if (undoStack[i].file_id === deletedId) undoStack.splice(i, 1);
+      }
+      refreshProgress();
+      goNext();
+    })
+    .catch((err) => alert("Delete failed: " + err.message));
+}
+
+function goNext() {
+  if (histIndex >= 0 && histIndex < visited.length - 1) {
+    histIndex++; loadItem(visited[histIndex]); return;
+  }
+  const after = fileId != null ? `&after=${fileId}` : "";
+  fetch(`/api/next?task=${TASK}${after}`).then((r) => r.json()).then((d) => {
+    if (d.done) { showDone(); return; }
+    setItem(d);
+    if (visited[visited.length - 1] !== d.file_id) visited.push(d.file_id);
+    histIndex = visited.length - 1;
+  });
+}
+function goPrev() {
+  if (histIndex > 0) { histIndex--; loadItem(visited[histIndex]); return; }
+  if (fileId == null) return;
+  fetch(`/api/seek?task=${TASK}&file_id=${fileId}&dir=prev`)
+    .then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then((d) => {
+      if (d.edge) { alert("Already at the first image."); return; }
+      setItem(d);
+      if (visited[0] !== d.file_id) visited.unshift(d.file_id);
+      histIndex = 0;
+    })
+    .catch((err) => alert("Can't go back (" + err.message + ")."));
+}
+function loadItem(id) {
+  fetch(`/api/item/${id}?task=${TASK}`).then((r) => r.json()).then(setItem);
+}
+
+function setItem(d) {
+  fileId = d.file_id;
+  label = d.label || null;
+  doneEl.style.display = "none"; frameEl.style.display = "";
+  fileidEl.textContent = `#${d.file_id}`;
+  wasbadgeEl.classList.toggle("on", !!label);
+  wasbadgeEl.textContent = label ? `was: ${label}` : "";
+  priobadgeEl.classList.toggle("on", !!d.priority);
+  frameEl.classList.toggle("dirty", label === "dirty");
+  frameEl.classList.toggle("clean", label === "clean");
+  photo.src = `/image/${d.file_id}?t=${d.file_id}`;
+  updateButtons();
+}
+function showDone() {
+  fileId = null; frameEl.style.display = "none"; doneEl.style.display = "block";
+  fileidEl.textContent = ""; wasbadgeEl.classList.remove("on");
+  priobadgeEl.classList.remove("on");
+  updateButtons();
+}
+function updateButtons() {
+  ["btnDirty", "btnClean", "btnSkip", "btnDelete"].forEach((id) =>
+    (document.getElementById(id).disabled = !fileId));
+  document.getElementById("btnUndo").disabled = !undoStack.length;
+}
+function refreshProgress() {
+  fetch(`/api/progress?task=${TASK}`).then((r) => r.json()).then((p) => {
+    const c = p.tasks[TASK];
+    const prio = c.priority_total
+      ? ` · <span class="prio">priority ${c.priority_remaining}/${c.priority_total} left</span>`
+      : "";
+    document.getElementById("counts").innerHTML =
+      `<div><b>${TASK}</b>: ${c.decided}/${c.total} · ${c.dirty} dirty · ${c.clean} clean · ${c.remaining} left${prio}</div>`;
+  });
+}
+
+document.getElementById("btnDirty").onclick = () => classify("dirty");
+document.getElementById("btnClean").onclick = () => classify("clean");
+document.getElementById("btnSkip").onclick = skip;
+document.getElementById("btnUndo").onclick = undo;
+document.getElementById("btnDelete").onclick = deleteImage;
+
+document.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "arrowleft")  { e.preventDefault(); goPrev(); return; }
+  if (k === "arrowright") { e.preventDefault(); goNext(); return; }
+  if (k === "z") { undo(); return; }
+  if (!fileId) return;
+  switch (k) {
+    case "d": classify("dirty"); break;
+    case "c": classify("clean"); break;
+    case "s": skip(); break;
+    case "x": deleteImage(); break;
+  }
+});
+
+refreshProgress();
+goNext();
+</script>

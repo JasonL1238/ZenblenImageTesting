@@ -9,9 +9,9 @@ YOLO11n-seg model:
 
 | mode | key | segments | dataset | model weights |
 |------|-----|----------|---------|---------------|
-| standard | `1` | smoothie **inside** the cup | `labeling/smoothie_dataset_std/` | `checkpoints/yolo_standard_seg.pt` |
-| spill | `2` | smoothie **outside** the cup | `labeling/spill_dataset/` | `checkpoints/yolo_spill_seg.pt` |
-| logo | `3` | the zenblen logo/wordmark | `labeling/logo_dataset/` | `checkpoints/yolo_logo_seg.pt` |
+| standard | `1` | smoothie **inside** the cup | `labeling/datasets/smoothie_dataset_std/` | `checkpoints/yolo_standard_seg.pt` |
+| spill | `2` | smoothie **outside** the cup | `labeling/datasets/spill_dataset/` | `checkpoints/yolo_spill_seg.pt` |
+| logo | `3` | the zenblen logo/wordmark | `labeling/datasets/logo_dataset/` | `checkpoints/yolo_logo_seg.pt` |
 
 Each mode is strictly separate: one source image labeled in all three modes
 yields three separate image+label pairs, never a mixed-class file. The 200
@@ -128,6 +128,50 @@ re-running after a better container model un-hides recovered cups. Measured on t
 been false-firing "spill" on the hardware, which the gate now keeps out of the
 dataset). LIMIT: a smoothie the container model itself misses could be
 false-flagged; keep the threshold low (default 0.25 = any detection).
+
+---
+
+## Classification track (current) — `app_classify.py`
+
+A FOURTH, self-contained pipeline: whole-image classification instead of
+polygons. First task: **cleandone** — is a `CleanDone`-category station photo
+`dirty` or `clean`? One label per image (no drawing), trained as a YOLO11n-cls
+model rather than YOLO-seg. Shares the `files` registry + `data/images/` with
+the rest of the tool but writes only to its own `classifications` table
+(`labeling/db.py`) — the seg tables are untouched.
+
+```bash
+# 1. Pull CleanDone images (category filter already supported by download.py).
+python labeling/download.py --start '2026-01-01 00:00:00' \
+                            --end   '2026-07-22 00:00:00' --category CleanDone
+#    -> only images with category_name='CleanDone' feed this task; widen the
+#       date range to build up a few hundred (15 in the DB as of this writing).
+
+# 2. Label. D = dirty · C = clean · S = skip (no save) · ←/→ prev/next.
+python labeling/app_classify.py                    # http://127.0.0.1:5003
+#    ← reaches ANY earlier image (even ones already decided) to re-classify.
+
+# 3. Export a folder-per-class dataset (no data.yaml — that's a cls-only layout).
+python labeling/export_cls.py --task cleandone
+#    -> datasets/cleandone_cls_dataset/{train,val,test}/{dirty,clean}/*.jpg
+
+# 4. Train (conda env; yolo11n-cls, imgsz 224).
+/opt/miniconda3/bin/python train_cls.py --task cleandone
+#    -> runs/cleandone-cls/cleandone-nano-v1/weights/best.pt
+
+# 5. Deploy (path printed at end of training).
+cp runs/cleandone-cls/cleandone-nano-v1/weights/best.pt checkpoints/best_cleaning.pt
+cp runs/cleandone-cls/cleandone-nano-v1/weights/best.pt ../active_pipeline/checkpoints/best_cleaning.pt
+```
+
+Not yet wired into `active_pipeline/run.py` / `smoothie_cv` inference — this
+track currently only produces `best.pt`. Runtime integration is a deliberate
+follow-up once the classifier's accuracy is validated.
+
+Note: this task deliberately does **not** use the `no_smoothie` /
+`flag_smoothie_presence.py` gate — that gate keys on the smoothie/container
+detector and would wrongly exclude the empty-station shots CleanDone images
+are made of.
 
 ---
 

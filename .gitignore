@@ -29,6 +29,8 @@ training/labeling/**/_train_data.yaml
 *.pt
 !active_pipeline/checkpoints/yolo_*.pt
 !training/checkpoints/yolo_*.pt
+!active_pipeline/checkpoints/best_cleaning.pt
+!training/checkpoints/best_cleaning.pt
 !training/runs/**/weights/*.pt
 
 # Training-run artifacts other than weights/

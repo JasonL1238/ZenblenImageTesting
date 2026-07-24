@@ -37,7 +37,7 @@ import common  # noqa: E402  (get_masks + cached ROI)
 
 REPO = common.REPO
 DB = REPO / "training" / "labeling" / "labels.db"
-OUT = REPO / "training" / "labeling" / "blended_dataset"
+OUT = REPO / "training" / "labeling" / "datasets" / "blended_dataset"
 APPROX_EPS = 1.5      # polygon simplification (px) — keeps point counts sane
 MIN_AREA = 200        # drop tiny blended fragments (px)
 
